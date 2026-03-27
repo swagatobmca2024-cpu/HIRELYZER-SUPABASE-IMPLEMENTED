@@ -19930,52 +19930,32 @@ Generate {num_questions} questions now:
                     elapsed_time = time.time() - st.session_state.question_timer_start
                     remaining_time = max(0, st.session_state.timer_seconds - elapsed_time)
 
-                    # ── CLIENT-SIDE TIMER (no rerun every second) ──────────────────────────
-                    # JS counts down in-browser using the absolute deadline timestamp.
-                    # When it hits zero it clicks a hidden Streamlit button via
-                    # window.parent.postMessage so Python reruns ONCE to fire auto-submit.
+                    # ── CLIENT-SIDE TIMER ─────────────────────────────────────────────────
+                    # Strategy: JS countdown runs purely in the browser iframe.
+                    # On expiry, JS sets window.parent.location.href with ?timer_expired=1
+                    # which triggers a Streamlit rerun with that query param present.
+                    # Python reads st.query_params, sets a session flag, clears the param,
+                    # and the auto-submit block fires. Zero sleep/rerun loops. No visible button.
                     import streamlit.components.v1 as _components
+
+                    # Check if this rerun was triggered by JS timer expiry via query param
+                    _qp = st.query_params.to_dict()
+                    if _qp.get("timer_expired") == "1" and not st.session_state.dynamic_answer_submitted:
+                        st.session_state._timer_force_expired = True
+                        # Clear the param so it doesn't persist across future reruns
+                        st.query_params.clear()
+
                     _deadline_ms = int((st.session_state.question_timer_start + st.session_state.timer_seconds) * 1000)
                     _total_ms    = int(st.session_state.timer_seconds * 1000)
 
-                    # Hidden trigger button — JS will click this when timer expires.
-                    # We render it invisible via CSS so it never shows in the UI.
-                    _timer_expired_clicked = st.button(
-                        "⏱️__timer_expired__",
-                        key=f"timer_expired_btn_{st.session_state.current_dynamic_interview_question}",
-                    )
-                    st.markdown("""
-                    <style>
-                      /* Hide the internal timer-expired trigger button completely */
-                      button[kind="secondary"] p:contains("__timer_expired__"),
-                      div[data-testid="stButton"] button p {
-                        /* scoped via JS below — we hide by key label match */
-                      }
-                      .t4-hide-btn { display: none !important; }
-                    </style>
-                    <script>
-                      /* Hide the trigger button by matching its text content */
-                      (function hideTriggerBtn() {
-                        var btns = window.parent.document.querySelectorAll('button');
-                        btns.forEach(function(b) {
-                          if (b.innerText && b.innerText.includes('__timer_expired__')) {
-                            b.closest('[data-testid="stButton"]').style.display = 'none';
-                          }
-                        });
-                        /* Re-run after a short delay in case DOM not ready yet */
-                        setTimeout(hideTriggerBtn, 500);
-                      })();
-                    </script>
-                    """, unsafe_allow_html=True)
-
                     _components.html(f"""
                     <style>
+                      body {{ margin:0; padding:0; background:transparent; }}
                       #t4-timer-wrap {{
                         background: linear-gradient(135deg, rgba(251,191,36,0.08) 0%, rgba(251,191,36,0.04) 100%);
                         border: 1px solid rgba(251,191,36,0.25);
                         border-radius: 10px;
                         padding: 14px;
-                        margin: 4px 0 0 0;
                         text-align: center;
                       }}
                       #t4-timer-text {{
@@ -20012,23 +19992,25 @@ Generate {num_questions} questions now:
                     </div>
                     <script>
                       (function() {{
-                        var deadline   = {_deadline_ms};
-                        var totalMs    = {_total_ms};
-                        var el         = document.getElementById('t4-timer-text');
-                        var bar        = document.getElementById('t4-prog-bar');
+                        var deadline    = {_deadline_ms};
+                        var totalMs     = {_total_ms};
+                        var el          = document.getElementById('t4-timer-text');
+                        var bar         = document.getElementById('t4-prog-bar');
                         var firedExpiry = false;
 
-                        function clickExpiredBtn() {{
-                          /* Walk up to the parent Streamlit page and click the hidden trigger */
+                        function triggerExpiry() {{
+                          // Add ?timer_expired=1 to the parent page URL.
+                          // Streamlit treats any URL change as a rerun trigger.
                           try {{
-                            var btns = window.parent.document.querySelectorAll('button');
-                            for (var i = 0; i < btns.length; i++) {{
-                              if (btns[i].innerText && btns[i].innerText.includes('__timer_expired__')) {{
-                                btns[i].click();
-                                break;
-                              }}
-                            }}
-                          }} catch(e) {{}}
+                            var parentUrl = window.parent.location.href;
+                            // Strip any existing timer_expired param first
+                            parentUrl = parentUrl.replace(/[?&]timer_expired=[0-9]/, '');
+                            var sep = parentUrl.includes('?') ? '&' : '?';
+                            window.parent.location.href = parentUrl + sep + 'timer_expired=1';
+                          }} catch(e) {{
+                            // Fallback: try location.reload if cross-origin blocked
+                            try {{ window.parent.location.reload(); }} catch(e2) {{}}
+                          }}
                         }}
 
                         function tick() {{
@@ -20058,10 +20040,7 @@ Generate {num_questions} questions now:
                             bar.style.width = '0%';
                             if (!firedExpiry) {{
                               firedExpiry = true;
-                              /* Retry a few times in case the button isn't in DOM yet */
-                              clickExpiredBtn();
-                              setTimeout(clickExpiredBtn, 600);
-                              setTimeout(clickExpiredBtn, 1400);
+                              triggerExpiry();
                             }}
                           }}
                         }}
@@ -20070,10 +20049,6 @@ Generate {num_questions} questions now:
                     </script>
                     """, height=90, scrolling=False)
                     # ── END CLIENT-SIDE TIMER ──────────────────────────────────────────────
-
-                    # If JS clicked the hidden button above, treat it as timer expiry
-                    if _timer_expired_clicked and not st.session_state.dynamic_answer_submitted:
-                        st.session_state._timer_force_expired = True
 
                     # Question display with phase indicator
                     phase_badge = "📄 Resume-Based Question" if current_index <= num_resume_qs else "💼 Generic Interview Question"
