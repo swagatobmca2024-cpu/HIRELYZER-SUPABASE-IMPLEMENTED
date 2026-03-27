@@ -19624,8 +19624,8 @@ Generate {num_questions} questions now:
                 st.session_state.question_timer_start = None
             if 'timer_seconds' not in st.session_state:
                 st.session_state.timer_seconds = 120
-            if 'auto_submit_triggered' not in st.session_state:
-                st.session_state.auto_submit_triggered = False
+            if 'timer_expired' not in st.session_state:
+                st.session_state.timer_expired = False
             if 'interview_difficulty' not in st.session_state:
                 st.session_state.interview_difficulty = "Medium"
             if 'interview_mode' not in st.session_state:
@@ -19928,28 +19928,52 @@ Generate {num_questions} questions now:
                     if st.session_state.question_timer_start is None:
                         st.session_state.question_timer_start = time.time()
 
-                    # Calculate remaining time
+                    # Calculate remaining time (used outside fragment for auto-submit logic)
                     elapsed_time = time.time() - st.session_state.question_timer_start
                     remaining_time = max(0, st.session_state.timer_seconds - elapsed_time)
 
-                    # Display timer — use st.empty() so only this node updates on rerun (no flicker)
-                    timer_minutes = int(remaining_time // 60)
-                    timer_seconds_display = int(remaining_time % 60)
-                    timer_urgent_class = "timer-urgent" if remaining_time <= 30 else ""
-
-                    timer_placeholder = st.empty()
-                    timer_placeholder.markdown(f"""
-                    <div class="timer-container">
-                        <div class="timer-display {timer_urgent_class}">
-                            ⏰ Time Remaining: {timer_minutes:02d}:{timer_seconds_display:02d}
+                    # ── FRAGMENT-BASED TIMER: re-renders only the timer widget every second ──
+                    # No full page rerun → zero flicker on question/answer area
+                    @st.fragment(run_every=1)
+                    def _render_timer():
+                        _elapsed = time.time() - st.session_state.question_timer_start
+                        _remaining = max(0, st.session_state.timer_seconds - _elapsed)
+                        _mins = int(_remaining // 60)
+                        _secs = int(_remaining % 60)
+                        _urgent_class = "timer-urgent" if _remaining <= 30 else ""
+                        st.markdown(f"""
+                        <div class="timer-container">
+                            <div class="timer-display {_urgent_class}">
+                                ⏰ Time Remaining: {_mins:02d}:{_secs:02d}
+                            </div>
                         </div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                        """, unsafe_allow_html=True)
+                        _progress_value = (_remaining / st.session_state.timer_seconds) if st.session_state.timer_seconds > 0 else 0
+                        # Progress bar drains left to right
+                        st.progress(max(0.0, min(1.0, 1.0 - _progress_value)))
+                        # When timer hits zero: set flag + trigger ONE full rerun for auto-submit
+                        # Guard: only fire st.rerun() once (when flag goes False → True)
+                        # After that, dynamic_answer_submitted becomes True so this never re-fires
+                        if _remaining <= 0 and not st.session_state.get('dynamic_answer_submitted', False):
+                            if not st.session_state.get('timer_expired', False):
+                                st.session_state.timer_expired = True
+                                st.rerun()  # safe: dynamic_answer_submitted will be True after this
 
-                    # Timer progress bar — also in a placeholder to minimise repaint
-                    progress_value = (st.session_state.timer_seconds - remaining_time) / st.session_state.timer_seconds
-                    progress_placeholder = st.empty()
-                    progress_placeholder.progress(progress_value)
+                    _render_timer()
+
+                    # Auto-submit: runs on the full rerun triggered above
+                    if st.session_state.get('timer_expired', False) and not st.session_state.dynamic_answer_submitted:
+                        st.session_state.timer_expired = False  # reset immediately to prevent re-trigger
+                        if not answer.strip():
+                            answer = "⚠️ No Answer"
+                        with st.spinner("Evaluating your answer..."):
+                            _process_submission(
+                                answer, question,
+                                st.session_state.current_dynamic_interview_question,
+                                questions_answered
+                            )
+                        st.warning("⏰ Time's up! Answer auto-submitted.")
+                        st.rerun()
 
                     # Question display with phase indicator
                     phase_badge = "📄 Resume-Based Question" if current_index <= num_resume_qs else "💼 Generic Interview Question"
@@ -19979,7 +20003,7 @@ Generate {num_questions} questions now:
                             st.session_state.dynamic_answer_submitted = False
                             st.session_state.current_interview_question_text = ""
                             st.session_state.question_timer_start = None
-                            st.session_state.auto_submit_triggered = False
+                            st.session_state.timer_expired = False
                             st.session_state.interview_result_saved = False
                             st.session_state.interview_final_duration_seconds = None
                             st.session_state.interview_actual_start_time = None
@@ -20094,22 +20118,8 @@ Generate {num_questions} questions now:
                     if 'pending_followup_strategy' not in st.session_state:
                         st.session_state.pending_followup_strategy = ""
 
-                    # Auto-submit logic when timer expires
-                    if remaining_time <= 0 and not st.session_state.dynamic_answer_submitted and not st.session_state.auto_submit_triggered:
-                        st.session_state.auto_submit_triggered = True  # set BEFORE processing to prevent double-fire
-                        if not answer.strip():
-                            answer = "⚠️ No Answer"
-                        with st.spinner("Evaluating your answer..."):
-                            _process_submission(
-                                answer, question,
-                                st.session_state.current_dynamic_interview_question,
-                                questions_answered
-                            )
-                        st.warning("⏰ Time's up! Answer auto-submitted.")
-                        st.rerun()
-
                     # Submit answer button
-                    if not st.session_state.dynamic_answer_submitted and remaining_time > 0:
+                    if not st.session_state.dynamic_answer_submitted:
                         if st.button("Submit Answer & Get Feedback"):
                             if answer.strip():
                                 with st.spinner("Evaluating your answer..."):
@@ -20191,7 +20201,6 @@ Generate {num_questions} questions now:
                             if st.button("Continue to Next Question ➡️"):
                                 st.session_state.current_dynamic_interview_question += 1
                                 st.session_state.dynamic_answer_submitted = False
-                                st.session_state.auto_submit_triggered = False  # reset guard for next question
                                 st.session_state.pending_followup_display = ""
                                 st.session_state.pending_followup_strategy = ""
                                 if st.session_state.current_dynamic_interview_question < len(st.session_state.dynamic_interview_questions):
@@ -20201,6 +20210,7 @@ Generate {num_questions} questions now:
                                     st.session_state.current_interview_question_text = f"Additional question for {selected_role}"
                                 # TIMER RESET: Reset timer for next question
                                 st.session_state.question_timer_start = time.time()
+                                st.session_state.timer_expired = False
                                 st.rerun()
 
                     # Progress bar for interview completion
@@ -20231,12 +20241,7 @@ Generate {num_questions} questions now:
                                     if i < num_to_show - 1:  # Don't add separator after last item
                                         st.markdown("---")
 
-                    # Auto-refresh for timer — st_autorefresh fires a rerun every second
-                    # without time.sleep(), so the UI never blocks and there's no full-page flash.
-                    # Only active while the timer is running and answer not yet submitted.
-                    if remaining_time > 0 and not st.session_state.dynamic_answer_submitted:
-                        from streamlit_autorefresh import st_autorefresh
-                        st_autorefresh(interval=1000, limit=None, key="interview_timer_refresh")
+                    # Auto-refresh handled by @st.fragment(run_every=1) above — no sleep/rerun needed
                 else:
                     # CRITICAL FIX: All questions answered, move to completion automatically
                     # Capture exact duration at auto-completion moment
@@ -20476,7 +20481,6 @@ Generate {num_questions} questions now:
                     st.session_state.current_interview_question_text = ""
                     st.session_state.question_timer_start = None
                     st.session_state.timer_seconds = 120
-                    st.session_state.auto_submit_triggered = False
                     st.session_state.interview_difficulty = "Medium"
                     st.session_state.original_num_questions = 6
                     st.session_state.resume_based_questions = []
