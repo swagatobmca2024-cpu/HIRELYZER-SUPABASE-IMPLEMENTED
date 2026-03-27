@@ -19931,11 +19931,43 @@ Generate {num_questions} questions now:
                     remaining_time = max(0, st.session_state.timer_seconds - elapsed_time)
 
                     # ── CLIENT-SIDE TIMER (no rerun every second) ──────────────────────────
-                    # We pass the exact deadline epoch (ms) to JS so it counts down
-                    # independently of Streamlit reruns.  No sleep/rerun loop needed.
+                    # JS counts down in-browser using the absolute deadline timestamp.
+                    # When it hits zero it clicks a hidden Streamlit button via
+                    # window.parent.postMessage so Python reruns ONCE to fire auto-submit.
                     import streamlit.components.v1 as _components
                     _deadline_ms = int((st.session_state.question_timer_start + st.session_state.timer_seconds) * 1000)
                     _total_ms    = int(st.session_state.timer_seconds * 1000)
+
+                    # Hidden trigger button — JS will click this when timer expires.
+                    # We render it invisible via CSS so it never shows in the UI.
+                    _timer_expired_clicked = st.button(
+                        "⏱️__timer_expired__",
+                        key=f"timer_expired_btn_{st.session_state.current_dynamic_interview_question}",
+                    )
+                    st.markdown("""
+                    <style>
+                      /* Hide the internal timer-expired trigger button completely */
+                      button[kind="secondary"] p:contains("__timer_expired__"),
+                      div[data-testid="stButton"] button p {
+                        /* scoped via JS below — we hide by key label match */
+                      }
+                      .t4-hide-btn { display: none !important; }
+                    </style>
+                    <script>
+                      /* Hide the trigger button by matching its text content */
+                      (function hideTriggerBtn() {
+                        var btns = window.parent.document.querySelectorAll('button');
+                        btns.forEach(function(b) {
+                          if (b.innerText && b.innerText.includes('__timer_expired__')) {
+                            b.closest('[data-testid="stButton"]').style.display = 'none';
+                          }
+                        });
+                        /* Re-run after a short delay in case DOM not ready yet */
+                        setTimeout(hideTriggerBtn, 500);
+                      })();
+                    </script>
+                    """, unsafe_allow_html=True)
+
                     _components.html(f"""
                     <style>
                       #t4-timer-wrap {{
@@ -19980,22 +20012,34 @@ Generate {num_questions} questions now:
                     </div>
                     <script>
                       (function() {{
-                        var deadline  = {_deadline_ms};
-                        var totalMs   = {_total_ms};
-                        var el        = document.getElementById('t4-timer-text');
-                        var bar       = document.getElementById('t4-prog-bar');
+                        var deadline   = {_deadline_ms};
+                        var totalMs    = {_total_ms};
+                        var el         = document.getElementById('t4-timer-text');
+                        var bar        = document.getElementById('t4-prog-bar');
+                        var firedExpiry = false;
+
+                        function clickExpiredBtn() {{
+                          /* Walk up to the parent Streamlit page and click the hidden trigger */
+                          try {{
+                            var btns = window.parent.document.querySelectorAll('button');
+                            for (var i = 0; i < btns.length; i++) {{
+                              if (btns[i].innerText && btns[i].innerText.includes('__timer_expired__')) {{
+                                btns[i].click();
+                                break;
+                              }}
+                            }}
+                          }} catch(e) {{}}
+                        }}
 
                         function tick() {{
                           var now  = Date.now();
                           var left = Math.max(0, deadline - now);
                           var mm   = Math.floor(left / 60000);
                           var ss   = Math.floor((left % 60000) / 1000);
-                          var label = '⏰ Time Remaining: ' +
-                                      String(mm).padStart(2,'0') + ':' +
-                                      String(ss).padStart(2,'0');
-                          el.textContent = label;
+                          el.textContent = '⏰ Time Remaining: ' +
+                                           String(mm).padStart(2,'0') + ':' +
+                                           String(ss).padStart(2,'0');
 
-                          // Urgent styling when ≤ 30 s
                           if (left <= 30000) {{
                             el.classList.add('urgent');
                             bar.style.background = 'linear-gradient(90deg,#f43f5e,#e11d48)';
@@ -20004,15 +20048,21 @@ Generate {num_questions} questions now:
                             bar.style.background = 'linear-gradient(90deg,#fbbf24,#f59e0b)';
                           }}
 
-                          // Progress bar width (consumed portion)
                           var pct = Math.min(100, ((totalMs - left) / totalMs) * 100);
                           bar.style.width = (100 - pct) + '%';
 
                           if (left > 0) {{
-                            setTimeout(tick, 500);   // 500 ms for smooth display
+                            setTimeout(tick, 500);
                           }} else {{
                             el.textContent = '⏰ Time Remaining: 00:00';
                             bar.style.width = '0%';
+                            if (!firedExpiry) {{
+                              firedExpiry = true;
+                              /* Retry a few times in case the button isn't in DOM yet */
+                              clickExpiredBtn();
+                              setTimeout(clickExpiredBtn, 600);
+                              setTimeout(clickExpiredBtn, 1400);
+                            }}
                           }}
                         }}
                         tick();
@@ -20020,6 +20070,10 @@ Generate {num_questions} questions now:
                     </script>
                     """, height=90, scrolling=False)
                     # ── END CLIENT-SIDE TIMER ──────────────────────────────────────────────
+
+                    # If JS clicked the hidden button above, treat it as timer expiry
+                    if _timer_expired_clicked and not st.session_state.dynamic_answer_submitted:
+                        st.session_state._timer_force_expired = True
 
                     # Question display with phase indicator
                     phase_badge = "📄 Resume-Based Question" if current_index <= num_resume_qs else "💼 Generic Interview Question"
@@ -20164,7 +20218,10 @@ Generate {num_questions} questions now:
                         st.session_state.pending_followup_strategy = ""
 
                     # Auto-submit logic when timer expires
-                    if remaining_time <= 0 and not st.session_state.dynamic_answer_submitted:
+                    # Fires when: (a) Python calculates remaining_time<=0, OR
+                    # (b) JS clicked the hidden trigger button (_timer_force_expired flag)
+                    _force_expired = st.session_state.pop('_timer_force_expired', False)
+                    if (remaining_time <= 0 or _force_expired) and not st.session_state.dynamic_answer_submitted:
                         if not answer.strip():
                             answer = "⚠️ No Answer"
                         with st.spinner("Evaluating your answer..."):
@@ -20176,7 +20233,7 @@ Generate {num_questions} questions now:
                         st.warning("⏰ Time's up! Answer auto-submitted.")
                         st.rerun()
 
-                    # Submit answer button
+                    # Submit answer button — show while timer running and answer not yet submitted
                     if not st.session_state.dynamic_answer_submitted and remaining_time > 0:
                         if st.button("Submit Answer & Get Feedback"):
                             if answer.strip():
@@ -20298,25 +20355,9 @@ Generate {num_questions} questions now:
                                     if i < num_to_show - 1:  # Don't add separator after last item
                                         st.markdown("---")
 
-                    # ── EXPIRY-ONLY RERUN (no per-second sleep/rerun) ─────────────────────
-                    # The JS component handles the visual countdown.
-                    # We only need Python to rerun when the timer has actually expired
-                    # so the auto-submit logic above can fire.  We check once per ~2 s
-                    # using a tiny non-blocking sleep ONLY when very close to expiry,
-                    # otherwise we do nothing — no rerun, no flicker.
-                    if not st.session_state.dynamic_answer_submitted:
-                        if remaining_time <= 0:
-                            # Timer just expired — rerun immediately so auto-submit fires
-                            st.rerun()
-                        elif remaining_time <= 3:
-                            # Within the last 3 s: poll quickly so we don't miss expiry
-                            time.sleep(1)
-                            st.rerun()
-                        # If remaining_time > 3 s: do nothing.
-                        # The JS timer ticks on its own; Streamlit will rerun naturally
-                        # when the user interacts (typing, clicking), which is enough to
-                        # re-evaluate remaining_time and catch expiry.
-                    # ── END EXPIRY-ONLY RERUN ─────────────────────────────────────────────
+                    # Timer expiry is handled by the JS component clicking the hidden
+                    # __timer_expired__ button above, which causes a natural Streamlit rerun.
+                    # No sleep/rerun loop needed here.
                 else:
                     # CRITICAL FIX: All questions answered, move to completion automatically
                     # Capture exact duration at auto-completion moment
