@@ -15349,65 +15349,6 @@ import json
 
 
 # =============================================================================
-# INTERVIEW TIMER FRAGMENT  (defined at module level — must NOT be nested)
-# =============================================================================
-# @st.fragment(run_every=1) reruns ONLY this small block every second.
-# The rest of the page (question card, text area, submit button) is completely
-# untouched, so there is zero flicker.  When the timer reaches zero it sets a
-# session flag and calls st.rerun() ONCE to escalate to a full-page rerun so
-# the auto-submit logic in the main script body can execute.
-# Requires Streamlit >= 1.33.
-
-@st.fragment(run_every=1)
-def _render_interview_timer():
-    """Renders the countdown timer. Reruns every 1 s without touching the page."""
-    # Guard: only run when an interview is actually in progress
-    if not st.session_state.get('question_timer_start') or \
-       not st.session_state.get('dynamic_interview_started', False) or \
-       st.session_state.get('dynamic_interview_completed', False) or \
-       st.session_state.get('dynamic_answer_submitted', False):
-        # Interview not active — render nothing and stop the fragment's auto-rerun
-        return
-
-    _elapsed  = time.time() - st.session_state.question_timer_start
-    _total    = st.session_state.timer_seconds
-    _left     = max(0.0, _total - _elapsed)
-    _mm       = int(_left // 60)
-    _ss       = int(_left % 60)
-    _urgent   = _left <= 30
-    _color    = "#f43f5e" if _urgent else "#fbbf24"
-    _anim     = "animation:t4pulse 1s ease-in-out infinite;" if _urgent else ""
-    _pct_left = (_left / _total * 100) if _total > 0 else 0
-    _bar_clr  = "#f43f5e" if _urgent else "#fbbf24"
-
-    st.markdown(f"""
-    <style>
-      @keyframes t4pulse {{0%,100%{{opacity:1;}}50%{{opacity:0.5;}}}}
-    </style>
-    <div style="background:linear-gradient(135deg,rgba(251,191,36,0.08),rgba(251,191,36,0.04));
-                border:1px solid rgba(251,191,36,0.25);border-radius:10px;
-                padding:14px;margin:4px 0;text-align:center;">
-      <div style="font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;
-                  font-size:1.4rem;font-weight:700;color:{_color};
-                  letter-spacing:-0.01em;{_anim}">
-        ⏰ Time Remaining: {_mm:02d}:{_ss:02d}
-      </div>
-      <div style="background:rgba(255,255,255,0.08);border-radius:4px;
-                  height:6px;margin:8px 4px 2px 4px;overflow:hidden;">
-        <div style="width:{_pct_left:.1f}%;height:100%;border-radius:4px;
-                    background:{_bar_clr};transition:width 0.9s linear;">
-        </div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Timer expired: signal the main script and trigger one full-page rerun
-    if _left <= 0:
-        st.session_state._timer_force_expired = True
-        st.rerun()  # escalates out of the fragment → full rerun → auto-submit fires
-
-
-# =============================================================================
 # SUPABASE POSTGRESQL — SINGLE CACHED CONNECTION  (anti-flicker fix)
 # =============================================================================
 # @st.cache_resource creates the psycopg2 connection ONCE per server process
@@ -19985,15 +19926,34 @@ Generate {num_questions} questions now:
                     if st.session_state.question_timer_start is None:
                         st.session_state.question_timer_start = time.time()
 
-                    # Calculate remaining time (server-side, used for auto-submit logic only)
+                    # Calculate remaining time (used outside fragment for auto-submit logic)
                     elapsed_time = time.time() - st.session_state.question_timer_start
                     remaining_time = max(0, st.session_state.timer_seconds - elapsed_time)
 
-                    # ── TIMER ─────────────────────────────────────────────────────────────
-                    # Calls the module-level fragment defined at the top of this file.
-                    # Only the timer reruns every second — the rest of the page is stable.
-                    _render_interview_timer()
-                    # ── END TIMER ─────────────────────────────────────────────────────────
+                    # ── FRAGMENT-BASED TIMER: re-renders only the timer widget every second ──
+                    # No full page rerun → zero flicker on question/answer area
+                    @st.fragment(run_every=1)
+                    def _render_timer():
+                        _elapsed = time.time() - st.session_state.question_timer_start
+                        _remaining = max(0, st.session_state.timer_seconds - _elapsed)
+                        _mins = int(_remaining // 60)
+                        _secs = int(_remaining % 60)
+                        _urgent_class = "timer-urgent" if _remaining <= 30 else ""
+                        st.markdown(f"""
+                        <div class="timer-container">
+                            <div class="timer-display {_urgent_class}">
+                                ⏰ Time Remaining: {_mins:02d}:{_secs:02d}
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        _progress_value = (_remaining / st.session_state.timer_seconds) if st.session_state.timer_seconds > 0 else 0
+                        # Show progress as time remaining (drains left to right)
+                        st.progress(max(0.0, min(1.0, 1.0 - _progress_value)))
+                        # Trigger full rerun only when timer hits zero (auto-submit moment)
+                        if _remaining <= 0 and not st.session_state.get('dynamic_answer_submitted', False):
+                            st.rerun()
+
+                    _render_timer()
 
                     # Question display with phase indicator
                     phase_badge = "📄 Resume-Based Question" if current_index <= num_resume_qs else "💼 Generic Interview Question"
@@ -20138,10 +20098,7 @@ Generate {num_questions} questions now:
                         st.session_state.pending_followup_strategy = ""
 
                     # Auto-submit logic when timer expires
-                    # Fires when: (a) Python calculates remaining_time<=0, OR
-                    # (b) st.fragment timer hit zero and set the _timer_force_expired flag
-                    _force_expired = st.session_state.pop('_timer_force_expired', False)
-                    if (remaining_time <= 0 or _force_expired) and not st.session_state.dynamic_answer_submitted:
+                    if remaining_time <= 0 and not st.session_state.dynamic_answer_submitted:
                         if not answer.strip():
                             answer = "⚠️ No Answer"
                         with st.spinner("Evaluating your answer..."):
@@ -20153,7 +20110,7 @@ Generate {num_questions} questions now:
                         st.warning("⏰ Time's up! Answer auto-submitted.")
                         st.rerun()
 
-                    # Submit answer button — show while timer running and answer not yet submitted
+                    # Submit answer button
                     if not st.session_state.dynamic_answer_submitted and remaining_time > 0:
                         if st.button("Submit Answer & Get Feedback"):
                             if answer.strip():
@@ -20275,8 +20232,7 @@ Generate {num_questions} questions now:
                                     if i < num_to_show - 1:  # Don't add separator after last item
                                         st.markdown("---")
 
-                    # Timer expiry: the st.fragment above sets _timer_force_expired and calls
-                    # st.rerun() once, which brings the full page through auto-submit logic.
+                    # Auto-refresh handled by @st.fragment(run_every=1) above — no sleep/rerun needed
                 else:
                     # CRITICAL FIX: All questions answered, move to completion automatically
                     # Capture exact duration at auto-completion moment
