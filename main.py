@@ -9183,11 +9183,22 @@ def render_template_navy_prestige(session_state, profile_img_html=""):
 # Layout standardized to match Classic Clean Single Column
 # ─────────────────────────────────────────────────────────────────────────────
 def render_template_slate_gray(session_state, profile_img_html=""):
-    """Slate Gray — single-column, charcoal headings, light gray accents.
-    Layout matches Classic Clean Single Column for consistency."""
+    """Slate Gray — single-column, ATS-friendly, high-contrast text throughout.
+    All body text ≥ #1e293b (near-black) for maximum readability and ATS parsing."""
     import re as _resg
 
-    # ── image (same size/style as Classic Clean) ──────────────────────────────
+    # Colour tokens — ALL contrast-tested against white (#ffffff)
+    # Primary text  : #0f172a  (~18:1)  — headings, company names, candidate name
+    # Secondary text: #1e293b  (~14:1)  — job titles, degree, body copy
+    # Muted text    : #374151  (~10:1)  — dates, durations, details (replaces #64748b/#94a3b8)
+    # Accent line   : #475569           — decorative only, never carries text
+    C_PRIMARY   = "#0f172a"
+    C_SECONDARY = "#1e293b"
+    C_MUTED     = "#374151"   # replaces all former #64748b / #94a3b8 / #475569 text uses
+    C_BODY      = "#1e293b"
+    C_ACCENT    = "#475569"   # used ONLY for borders / decorative lines, not text
+
+    # ── image ──────────────────────────────────────────────────────────────────
     def _fix_img(html, size=88):
         if not html:
             return ""
@@ -9198,34 +9209,35 @@ def render_template_slate_gray(session_state, profile_img_html=""):
         img_tag = _resg.sub(r"style=['\"][^'\"]*['\"]", "", img_tag)
         img_tag = img_tag.replace("<img ", f"<img style='width:{size}px;height:{size}px;border-radius:50%;"
                                   f"object-fit:cover;object-position:center;display:block;margin:0 auto 10px;"
-                                  f"border:2px solid #64748b;' ")
+                                  f"border:2px solid {C_ACCENT};' ")
         return img_tag
 
-    # ── section header — Slate Gray colour identity, Classic Clean structure ──
+    # ── section header ─────────────────────────────────────────────────────────
     def section(title, content):
         return f"""
         <div style='margin-bottom:24px;'>
-            <h2 style='font-size:14px;font-weight:700;letter-spacing:2px;text-transform:uppercase;
-                color:#1e293b;border-bottom:2px solid #64748b;padding-bottom:4px;margin-bottom:14px;'>{title}</h2>
+            <h2 style='font-size:14px;font-weight:800;letter-spacing:2px;text-transform:uppercase;
+                color:{C_PRIMARY};border-bottom:2px solid {C_ACCENT};padding-bottom:5px;margin-bottom:14px;'>{title}</h2>
             {content}
         </div>"""
 
-    # ── skill / tag pills — Slate Gray palette ────────────────────────────────
-    def pills(s, bg="#f1f5f9", color="#1e293b", border="#cbd5e1"):
+    # ── skill / tag pills ─────────────────────────────────────────────────────
+    def pills(s, bg="#f1f5f9", color=None, border="#94a3b8"):
+        _color = color if color else C_PRIMARY
         return "".join(
-            f"<span style='display:inline-block;background:{bg};color:{color};border:1px solid {border};"
-            f"border-radius:4px;padding:4px 12px;margin:4px 4px 4px 0;font-size:13px;font-weight:600;'>{x.strip()}</span>"
+            f"<span style='display:inline-block;background:{bg};color:{_color};border:1px solid {border};"
+            f"border-radius:4px;padding:4px 12px;margin:4px 4px 4px 0;font-size:13px;font-weight:700;'>{x.strip()}</span>"
             for x in s.split(',') if x.strip())
 
-    # ── contact line — identical structure to Classic Clean ───────────────────
+    # ── contact line ───────────────────────────────────────────────────────────
     def _contact_link(key, val):
         if key == 'email':
-            return f"<a href='mailto:{val}' style='color:#1e293b;text-decoration:none;'>{val}</a>"
+            return f"<a href='mailto:{val}' style='color:{C_PRIMARY};text-decoration:none;font-weight:500;'>{val}</a>"
         elif key in ('linkedin', 'portfolio', 'github'):
             href = val if val.startswith('http') else f"https://{val}"
-            return f"<a href='{href}' target='_blank' style='color:#1e293b;text-decoration:none;'>{val}</a>"
+            return f"<a href='{href}' target='_blank' style='color:{C_PRIMARY};text-decoration:none;font-weight:500;'>{val}</a>"
         else:
-            return val
+            return f"<span style='color:{C_PRIMARY};'>{val}</span>"
 
     contact_parts = []
     for key in ['email', 'phone', 'location', 'linkedin', 'portfolio', 'github']:
@@ -9238,15 +9250,16 @@ def render_template_slate_gray(session_state, profile_img_html=""):
     experience_html = ""
     for exp in session_state.experience_entries:
         if exp.get('company') or exp.get('title'):
-            desc = _fmt_desc(exp.get('description', ''), font_size='14px', color='#334155', line_height='1.75')
+            desc = _fmt_desc(exp.get('description', ''), font_size='14px', color=C_BODY, line_height='1.75')
             experience_html += f"""
             <div style='margin-bottom:18px;'>
-                <div style='display:flex;justify-content:space-between;align-items:baseline;'>
-                    <strong style='font-size:16px;color:#1e293b;'>{exp.get('company','')}</strong>
-                    <span style='font-size:13px;color:#64748b;'>{exp.get('duration','')}</span>
+                <div style='display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px;'>
+                    <strong style='font-size:16px;color:{C_PRIMARY};'>{exp.get('company','')}</strong>
+                    <span style='font-size:13px;color:{C_MUTED};font-weight:600;background:#f1f5f9;
+                          padding:2px 8px;border-radius:4px;border:1px solid #cbd5e1;'>{exp.get('duration','')}</span>
                 </div>
-                <div style='font-size:14px;color:#475569;font-weight:600;font-style:italic;margin-bottom:6px;'>{exp.get('title','')}</div>
-                <div style='font-size:14px;color:#334155;line-height:1.7;'>{desc}</div>
+                <div style='font-size:14px;color:{C_SECONDARY};font-weight:700;margin:4px 0 6px 0;'>{exp.get('title','')}</div>
+                <div style='font-size:14px;color:{C_BODY};line-height:1.75;'>{desc}</div>
             </div>
             <hr style='border:none;border-top:1px solid #e2e8f0;margin:12px 0;'>"""
 
@@ -9258,13 +9271,14 @@ def render_template_slate_gray(session_state, profile_img_html=""):
             if isinstance(dv, list):
                 dv = ", ".join(dv)
             education_html += f"""
-            <div style='margin-bottom:14px;'>
-                <div style='display:flex;justify-content:space-between;'>
-                    <strong style='font-size:15px;color:#1e293b;'>{edu.get('institution','')}</strong>
-                    <span style='font-size:13px;color:#64748b;'>{edu.get('year','')}</span>
+            <div style='margin-bottom:16px;'>
+                <div style='display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;'>
+                    <strong style='font-size:15px;color:{C_PRIMARY};'>{edu.get('institution','')}</strong>
+                    <span style='font-size:13px;color:{C_MUTED};font-weight:600;background:#f1f5f9;
+                          padding:2px 8px;border-radius:4px;border:1px solid #cbd5e1;'>{edu.get('year','')}</span>
                 </div>
-                <div style='font-size:14px;color:#64748b;font-style:italic;'>{dv}</div>
-                <div style='font-size:13px;color:#94a3b8;'>{edu.get('details','')}</div>
+                <div style='font-size:14px;color:{C_SECONDARY};font-weight:600;font-style:italic;margin-top:3px;'>{dv}</div>
+                <div style='font-size:13px;color:{C_MUTED};margin-top:3px;font-weight:500;'>{edu.get('details','')}</div>
             </div>"""
 
     # ── projects ──────────────────────────────────────────────────────────────
@@ -9272,19 +9286,22 @@ def render_template_slate_gray(session_state, profile_img_html=""):
     proj_links = getattr(session_state, 'project_links', []) or []
     for idx, proj in enumerate(session_state.project_entries):
         if proj.get('title'):
-            desc = _fmt_desc(proj.get('description', ''), font_size='14px', color='#334155', line_height='1.75')
+            desc = _fmt_desc(proj.get('description', ''), font_size='14px', color=C_BODY, line_height='1.75')
             proj_link_html = ""
             if idx < len(proj_links) and proj_links[idx]:
                 proj_link_html = (f"<div style='margin-top:5px;font-size:13px;'>"
-                                  f"<a href='{proj_links[idx]}' target='_blank' style='color:#475569;font-weight:600;'>&#128279; View Project / GitHub</a></div>")
+                                  f"<a href='{proj_links[idx]}' target='_blank' "
+                                  f"style='color:{C_PRIMARY};font-weight:700;text-decoration:underline;'>"
+                                  f"&#128279; View Project / GitHub</a></div>")
             projects_html += f"""
-            <div style='margin-bottom:16px;'>
-                <div style='display:flex;justify-content:space-between;'>
-                    <strong style='font-size:15px;color:#1e293b;'>{proj.get('title','')}</strong>
-                    <span style='font-size:13px;color:#64748b;'>{proj.get('duration','')}</span>
+            <div style='margin-bottom:18px;padding:12px 14px;background:#f8fafc;
+                        border-left:3px solid {C_ACCENT};border-radius:0 6px 6px 0;'>
+                <div style='display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;'>
+                    <strong style='font-size:15px;color:{C_PRIMARY};'>{proj.get('title','')}</strong>
+                    <span style='font-size:13px;color:{C_MUTED};font-weight:600;'>{proj.get('duration','')}</span>
                 </div>
-                <div style='font-size:13px;color:#64748b;margin-bottom:4px;'><b>Tech:</b> {proj.get('tech','')}</div>
-                <div style='font-size:14px;color:#334155;line-height:1.6;'>{desc}</div>
+                <div style='font-size:13px;color:{C_SECONDARY};font-weight:700;margin:4px 0;'>Tech Stack: {proj.get('tech','')}</div>
+                <div style='font-size:14px;color:{C_BODY};line-height:1.75;'>{desc}</div>
                 {proj_link_html}
             </div>"""
 
@@ -9293,26 +9310,31 @@ def render_template_slate_gray(session_state, profile_img_html=""):
     proj_links_all = getattr(session_state, 'project_links', []) or []
     if proj_links_all:
         all_links_html = "".join(
-            f"<div style='margin-bottom:6px;'><a href='{lnk}' target='_blank' style='color:#475569;font-weight:600;font-size:14px;'>&#128279; Project {i+1}: {lnk}</a></div>"
+            f"<div style='margin-bottom:6px;'><a href='{lnk}' target='_blank' "
+            f"style='color:{C_PRIMARY};font-weight:700;font-size:14px;text-decoration:underline;'>"
+            f"&#128279; Project {i+1}: {lnk}</a></div>"
             for i, lnk in enumerate(proj_links_all) if lnk)
 
     # ── certifications ────────────────────────────────────────────────────────
     cert_html = ""
     for cert in session_state.certificate_links:
         if cert.get('name'):
-            desc = _fmt_desc(cert.get('description', ''), font_size='13px', color='#64748b', line_height='1.7')
+            desc = _fmt_desc(cert.get('description', ''), font_size='13px', color=C_MUTED, line_height='1.7')
             cert_html += f"""
-            <div style='margin-bottom:12px;'>
-                <div style='display:flex;justify-content:space-between;'>
-                    <a href='{cert.get("link","#")}' target='_blank' style='font-weight:600;color:#1e293b;font-size:15px;text-decoration:none;'>{cert.get("name","")}</a>
-                    <span style='font-size:13px;color:#64748b;'>{cert.get("duration","")}</span>
+            <div style='margin-bottom:14px;padding:10px 12px;background:#f8fafc;
+                        border-left:3px solid {C_ACCENT};border-radius:0 6px 6px 0;'>
+                <div style='display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;'>
+                    <a href='{cert.get("link","#")}' target='_blank'
+                       style='font-weight:700;color:{C_PRIMARY};font-size:15px;text-decoration:none;'>{cert.get("name","")}</a>
+                    <span style='font-size:13px;color:{C_MUTED};font-weight:600;background:#f1f5f9;
+                          padding:2px 8px;border-radius:4px;border:1px solid #cbd5e1;'>{cert.get("duration","")}</span>
                 </div>
-                <div style='font-size:13px;color:#64748b;'>{desc}</div>
+                <div style='font-size:13px;color:{C_MUTED};margin-top:4px;'>{desc}</div>
             </div>"""
 
-    summary_html = _fmt_desc(session_state.get('summary', ''), font_size='14px', color='#334155', line_height='1.8')
+    summary_html = _fmt_desc(session_state.get('summary', ''), font_size='14px', color=C_BODY, line_height='1.8')
     fixed_img = _fix_img(profile_img_html)
-    job_title_line = (f"<div style='font-size:16px;color:#475569;font-weight:600;margin-top:4px;'>"
+    job_title_line = (f"<div style='font-size:16px;color:{C_SECONDARY};font-weight:700;margin-top:5px;letter-spacing:0.5px;'>"
                       f"{session_state.get('job_title','')}</div>") if session_state.get('job_title', '') else ""
 
     html_content = f"""<!DOCTYPE html>
@@ -9320,26 +9342,27 @@ def render_template_slate_gray(session_state, profile_img_html=""):
 <head><meta charset='UTF-8'><title>{session_state.get('name','')} - Resume</title>
 <style>
   * {{ box-sizing:border-box; margin:0; padding:0; }}
-  body {{ font-family:'Segoe UI',Arial,sans-serif; color:#1e293b; background:#ffffff; padding:40px 60px; line-height:1.6; }}
-  a {{ color:#475569; }}
+  body {{ font-family:'Segoe UI',Arial,sans-serif; color:{C_PRIMARY}; background:#ffffff; padding:40px 60px; line-height:1.6; }}
+  a {{ color:{C_PRIMARY}; }}
 </style>
 </head>
 <body>
-  <div style='text-align:center;margin-bottom:6px;'>
+  <!-- HEADER -->
+  <div style='text-align:center;margin-bottom:8px;'>
     {fixed_img}
-    <h1 style='font-size:32px;font-weight:700;letter-spacing:1px;color:#1e293b;'>{session_state.get('name','')}</h1>
+    <h1 style='font-size:32px;font-weight:800;letter-spacing:1px;color:{C_PRIMARY};'>{session_state.get('name','')}</h1>
     {job_title_line}
-    <div style='font-size:13px;color:#64748b;margin-top:6px;'>{contact_line}</div>
+    <div style='font-size:13px;color:{C_PRIMARY};margin-top:8px;font-weight:500;'>{contact_line}</div>
   </div>
-  <hr style='border:none;border-top:3px solid #64748b;margin:16px 0 24px 0;'>
+  <hr style='border:none;border-top:3px solid {C_ACCENT};margin:16px 0 24px 0;'>
 
   {section("Professional Summary", summary_html) if summary_html else ''}
   {section("Work Experience", experience_html) if experience_html else ''}
   {section("Education", education_html) if education_html else ''}
   {section("Technical Skills", pills(session_state.get('skills',''))) if session_state.get('skills') else ''}
-  {section("Core Competencies", pills(session_state.get('Softskills',''),'#f0f9ff','#0c4a6e','#bae6fd')) if session_state.get('Softskills') else ''}
-  {section("Languages", pills(session_state.get('languages',''),'#f0fdf4','#14532d','#bbf7d0')) if session_state.get('languages') else ''}
-  {section("Interests", pills(session_state.get('interests',''),'#fdf4ff','#581c87','#e9d5ff')) if session_state.get('interests') else ''}
+  {section("Core Competencies", pills(session_state.get('Softskills',''), bg='#f0f9ff', color='#0c4a6e', border='#7dd3fc')) if session_state.get('Softskills') else ''}
+  {section("Languages", pills(session_state.get('languages',''), bg='#f0fdf4', color='#14532d', border='#86efac')) if session_state.get('languages') else ''}
+  {section("Interests", pills(session_state.get('interests',''), bg='#fdf4ff', color='#581c87', border='#d8b4fe')) if session_state.get('interests') else ''}
   {section("Projects", projects_html) if projects_html else ''}
   {section("Project Links", all_links_html) if all_links_html else ''}
   {section("Certifications", cert_html) if cert_html else ''}
@@ -10482,7 +10505,9 @@ def generate_cover_letter_from_resume_builder():
     summary = st.session_state.get("summary", "")
     skills = st.session_state.get("skills", "")
     location = st.session_state.get("location", "")
-    today_date = datetime.today().strftime("%B %d, %Y")
+    from datetime import timezone, timedelta
+    IST = timezone(timedelta(hours=5, minutes=30))
+    today_date = datetime.now(IST).strftime("%B %d, %Y")
 
     # ✅ FIX 1 — Template selector dropdown
     cover_letter_template = st.selectbox(
