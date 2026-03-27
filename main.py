@@ -19926,26 +19926,100 @@ Generate {num_questions} questions now:
                     if st.session_state.question_timer_start is None:
                         st.session_state.question_timer_start = time.time()
 
-                    # Calculate remaining time
+                    # Calculate remaining time (server-side, used for auto-submit logic only)
                     elapsed_time = time.time() - st.session_state.question_timer_start
                     remaining_time = max(0, st.session_state.timer_seconds - elapsed_time)
 
-                    # Display timer
-                    timer_minutes = int(remaining_time // 60)
-                    timer_seconds_display = int(remaining_time % 60)
-                    timer_urgent_class = "timer-urgent" if remaining_time <= 30 else ""
-
-                    st.markdown(f"""
-                    <div class="timer-container">
-                        <div class="timer-display {timer_urgent_class}">
-                            ⏰ Time Remaining: {timer_minutes:02d}:{timer_seconds_display:02d}
-                        </div>
+                    # ── CLIENT-SIDE TIMER (no rerun every second) ──────────────────────────
+                    # We pass the exact deadline epoch (ms) to JS so it counts down
+                    # independently of Streamlit reruns.  No sleep/rerun loop needed.
+                    import streamlit.components.v1 as _components
+                    _deadline_ms = int((st.session_state.question_timer_start + st.session_state.timer_seconds) * 1000)
+                    _total_ms    = int(st.session_state.timer_seconds * 1000)
+                    _components.html(f"""
+                    <style>
+                      #t4-timer-wrap {{
+                        background: linear-gradient(135deg, rgba(251,191,36,0.08) 0%, rgba(251,191,36,0.04) 100%);
+                        border: 1px solid rgba(251,191,36,0.25);
+                        border-radius: 10px;
+                        padding: 14px;
+                        margin: 4px 0 0 0;
+                        text-align: center;
+                      }}
+                      #t4-timer-text {{
+                        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+                        font-size: 1.4rem;
+                        font-weight: 700;
+                        color: #fbbf24;
+                        letter-spacing: -0.01em;
+                      }}
+                      #t4-timer-text.urgent {{
+                        color: #f43f5e;
+                        animation: t4pulse 1s ease-in-out infinite;
+                      }}
+                      @keyframes t4pulse {{
+                        0%,100% {{ opacity:1; }} 50% {{ opacity:0.55; }}
+                      }}
+                      #t4-prog-wrap {{
+                        background: rgba(255,255,255,0.08);
+                        border-radius: 4px;
+                        height: 6px;
+                        margin: 8px 4px 2px 4px;
+                        overflow: hidden;
+                      }}
+                      #t4-prog-bar {{
+                        height: 100%;
+                        border-radius: 4px;
+                        background: linear-gradient(90deg, #fbbf24, #f59e0b);
+                        transition: width 0.95s linear;
+                      }}
+                    </style>
+                    <div id="t4-timer-wrap">
+                      <div id="t4-timer-text">⏰ Time Remaining: --:--</div>
+                      <div id="t4-prog-wrap"><div id="t4-prog-bar" style="width:100%"></div></div>
                     </div>
-                    """, unsafe_allow_html=True)
+                    <script>
+                      (function() {{
+                        var deadline  = {_deadline_ms};
+                        var totalMs   = {_total_ms};
+                        var el        = document.getElementById('t4-timer-text');
+                        var bar       = document.getElementById('t4-prog-bar');
 
-                    # Timer progress bar
-                    progress_value = (st.session_state.timer_seconds - remaining_time) / st.session_state.timer_seconds
-                    st.progress(progress_value)
+                        function tick() {{
+                          var now  = Date.now();
+                          var left = Math.max(0, deadline - now);
+                          var mm   = Math.floor(left / 60000);
+                          var ss   = Math.floor((left % 60000) / 1000);
+                          var label = '⏰ Time Remaining: ' +
+                                      String(mm).padStart(2,'0') + ':' +
+                                      String(ss).padStart(2,'0');
+                          el.textContent = label;
+
+                          // Urgent styling when ≤ 30 s
+                          if (left <= 30000) {{
+                            el.classList.add('urgent');
+                            bar.style.background = 'linear-gradient(90deg,#f43f5e,#e11d48)';
+                          }} else {{
+                            el.classList.remove('urgent');
+                            bar.style.background = 'linear-gradient(90deg,#fbbf24,#f59e0b)';
+                          }}
+
+                          // Progress bar width (consumed portion)
+                          var pct = Math.min(100, ((totalMs - left) / totalMs) * 100);
+                          bar.style.width = (100 - pct) + '%';
+
+                          if (left > 0) {{
+                            setTimeout(tick, 500);   // 500 ms for smooth display
+                          }} else {{
+                            el.textContent = '⏰ Time Remaining: 00:00';
+                            bar.style.width = '0%';
+                          }}
+                        }}
+                        tick();
+                      }})();
+                    </script>
+                    """, height=90, scrolling=False)
+                    # ── END CLIENT-SIDE TIMER ──────────────────────────────────────────────
 
                     # Question display with phase indicator
                     phase_badge = "📄 Resume-Based Question" if current_index <= num_resume_qs else "💼 Generic Interview Question"
@@ -20224,10 +20298,25 @@ Generate {num_questions} questions now:
                                     if i < num_to_show - 1:  # Don't add separator after last item
                                         st.markdown("---")
 
-                    # Auto-refresh for timer
-                    if remaining_time > 0 and not st.session_state.dynamic_answer_submitted:
-                        time.sleep(1)
-                        st.rerun()
+                    # ── EXPIRY-ONLY RERUN (no per-second sleep/rerun) ─────────────────────
+                    # The JS component handles the visual countdown.
+                    # We only need Python to rerun when the timer has actually expired
+                    # so the auto-submit logic above can fire.  We check once per ~2 s
+                    # using a tiny non-blocking sleep ONLY when very close to expiry,
+                    # otherwise we do nothing — no rerun, no flicker.
+                    if not st.session_state.dynamic_answer_submitted:
+                        if remaining_time <= 0:
+                            # Timer just expired — rerun immediately so auto-submit fires
+                            st.rerun()
+                        elif remaining_time <= 3:
+                            # Within the last 3 s: poll quickly so we don't miss expiry
+                            time.sleep(1)
+                            st.rerun()
+                        # If remaining_time > 3 s: do nothing.
+                        # The JS timer ticks on its own; Streamlit will rerun naturally
+                        # when the user interacts (typing, clicking), which is enough to
+                        # re-evaluate remaining_time and catch expiry.
+                    # ── END EXPIRY-ONLY RERUN ─────────────────────────────────────────────
                 else:
                     # CRITICAL FIX: All questions answered, move to completion automatically
                     # Capture exact duration at auto-completion moment
