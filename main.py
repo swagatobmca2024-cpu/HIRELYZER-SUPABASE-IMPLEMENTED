@@ -15349,6 +15349,65 @@ import json
 
 
 # =============================================================================
+# INTERVIEW TIMER FRAGMENT  (defined at module level — must NOT be nested)
+# =============================================================================
+# @st.fragment(run_every=1) reruns ONLY this small block every second.
+# The rest of the page (question card, text area, submit button) is completely
+# untouched, so there is zero flicker.  When the timer reaches zero it sets a
+# session flag and calls st.rerun() ONCE to escalate to a full-page rerun so
+# the auto-submit logic in the main script body can execute.
+# Requires Streamlit >= 1.33.
+
+@st.fragment(run_every=1)
+def _render_interview_timer():
+    """Renders the countdown timer. Reruns every 1 s without touching the page."""
+    # Guard: only run when an interview is actually in progress
+    if not st.session_state.get('question_timer_start') or \
+       not st.session_state.get('dynamic_interview_started', False) or \
+       st.session_state.get('dynamic_interview_completed', False) or \
+       st.session_state.get('dynamic_answer_submitted', False):
+        # Interview not active — render nothing and stop the fragment's auto-rerun
+        return
+
+    _elapsed  = time.time() - st.session_state.question_timer_start
+    _total    = st.session_state.timer_seconds
+    _left     = max(0.0, _total - _elapsed)
+    _mm       = int(_left // 60)
+    _ss       = int(_left % 60)
+    _urgent   = _left <= 30
+    _color    = "#f43f5e" if _urgent else "#fbbf24"
+    _anim     = "animation:t4pulse 1s ease-in-out infinite;" if _urgent else ""
+    _pct_left = (_left / _total * 100) if _total > 0 else 0
+    _bar_clr  = "#f43f5e" if _urgent else "#fbbf24"
+
+    st.markdown(f"""
+    <style>
+      @keyframes t4pulse {{0%,100%{{opacity:1;}}50%{{opacity:0.5;}}}}
+    </style>
+    <div style="background:linear-gradient(135deg,rgba(251,191,36,0.08),rgba(251,191,36,0.04));
+                border:1px solid rgba(251,191,36,0.25);border-radius:10px;
+                padding:14px;margin:4px 0;text-align:center;">
+      <div style="font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;
+                  font-size:1.4rem;font-weight:700;color:{_color};
+                  letter-spacing:-0.01em;{_anim}">
+        ⏰ Time Remaining: {_mm:02d}:{_ss:02d}
+      </div>
+      <div style="background:rgba(255,255,255,0.08);border-radius:4px;
+                  height:6px;margin:8px 4px 2px 4px;overflow:hidden;">
+        <div style="width:{_pct_left:.1f}%;height:100%;border-radius:4px;
+                    background:{_bar_clr};transition:width 0.9s linear;">
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Timer expired: signal the main script and trigger one full-page rerun
+    if _left <= 0:
+        st.session_state._timer_force_expired = True
+        st.rerun()  # escalates out of the fragment → full rerun → auto-submit fires
+
+
+# =============================================================================
 # SUPABASE POSTGRESQL — SINGLE CACHED CONNECTION  (anti-flicker fix)
 # =============================================================================
 # @st.cache_resource creates the psycopg2 connection ONCE per server process
@@ -19930,125 +19989,11 @@ Generate {num_questions} questions now:
                     elapsed_time = time.time() - st.session_state.question_timer_start
                     remaining_time = max(0, st.session_state.timer_seconds - elapsed_time)
 
-                    # ── CLIENT-SIDE TIMER ─────────────────────────────────────────────────
-                    # Strategy: JS countdown runs purely in the browser iframe.
-                    # On expiry, JS sets window.parent.location.href with ?timer_expired=1
-                    # which triggers a Streamlit rerun with that query param present.
-                    # Python reads st.query_params, sets a session flag, clears the param,
-                    # and the auto-submit block fires. Zero sleep/rerun loops. No visible button.
-                    import streamlit.components.v1 as _components
-
-                    # Check if this rerun was triggered by JS timer expiry via query param
-                    _qp = st.query_params.to_dict()
-                    if _qp.get("timer_expired") == "1" and not st.session_state.dynamic_answer_submitted:
-                        st.session_state._timer_force_expired = True
-                        # Clear the param so it doesn't persist across future reruns
-                        st.query_params.clear()
-
-                    _deadline_ms = int((st.session_state.question_timer_start + st.session_state.timer_seconds) * 1000)
-                    _total_ms    = int(st.session_state.timer_seconds * 1000)
-
-                    _components.html(f"""
-                    <style>
-                      body {{ margin:0; padding:0; background:transparent; }}
-                      #t4-timer-wrap {{
-                        background: linear-gradient(135deg, rgba(251,191,36,0.08) 0%, rgba(251,191,36,0.04) 100%);
-                        border: 1px solid rgba(251,191,36,0.25);
-                        border-radius: 10px;
-                        padding: 14px;
-                        text-align: center;
-                      }}
-                      #t4-timer-text {{
-                        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
-                        font-size: 1.4rem;
-                        font-weight: 700;
-                        color: #fbbf24;
-                        letter-spacing: -0.01em;
-                      }}
-                      #t4-timer-text.urgent {{
-                        color: #f43f5e;
-                        animation: t4pulse 1s ease-in-out infinite;
-                      }}
-                      @keyframes t4pulse {{
-                        0%,100% {{ opacity:1; }} 50% {{ opacity:0.55; }}
-                      }}
-                      #t4-prog-wrap {{
-                        background: rgba(255,255,255,0.08);
-                        border-radius: 4px;
-                        height: 6px;
-                        margin: 8px 4px 2px 4px;
-                        overflow: hidden;
-                      }}
-                      #t4-prog-bar {{
-                        height: 100%;
-                        border-radius: 4px;
-                        background: linear-gradient(90deg, #fbbf24, #f59e0b);
-                        transition: width 0.95s linear;
-                      }}
-                    </style>
-                    <div id="t4-timer-wrap">
-                      <div id="t4-timer-text">⏰ Time Remaining: --:--</div>
-                      <div id="t4-prog-wrap"><div id="t4-prog-bar" style="width:100%"></div></div>
-                    </div>
-                    <script>
-                      (function() {{
-                        var deadline    = {_deadline_ms};
-                        var totalMs     = {_total_ms};
-                        var el          = document.getElementById('t4-timer-text');
-                        var bar         = document.getElementById('t4-prog-bar');
-                        var firedExpiry = false;
-
-                        function triggerExpiry() {{
-                          // Add ?timer_expired=1 to the parent page URL.
-                          // Streamlit treats any URL change as a rerun trigger.
-                          try {{
-                            var parentUrl = window.parent.location.href;
-                            // Strip any existing timer_expired param first
-                            parentUrl = parentUrl.replace(/[?&]timer_expired=[0-9]/, '');
-                            var sep = parentUrl.includes('?') ? '&' : '?';
-                            window.parent.location.href = parentUrl + sep + 'timer_expired=1';
-                          }} catch(e) {{
-                            // Fallback: try location.reload if cross-origin blocked
-                            try {{ window.parent.location.reload(); }} catch(e2) {{}}
-                          }}
-                        }}
-
-                        function tick() {{
-                          var now  = Date.now();
-                          var left = Math.max(0, deadline - now);
-                          var mm   = Math.floor(left / 60000);
-                          var ss   = Math.floor((left % 60000) / 1000);
-                          el.textContent = '⏰ Time Remaining: ' +
-                                           String(mm).padStart(2,'0') + ':' +
-                                           String(ss).padStart(2,'0');
-
-                          if (left <= 30000) {{
-                            el.classList.add('urgent');
-                            bar.style.background = 'linear-gradient(90deg,#f43f5e,#e11d48)';
-                          }} else {{
-                            el.classList.remove('urgent');
-                            bar.style.background = 'linear-gradient(90deg,#fbbf24,#f59e0b)';
-                          }}
-
-                          var pct = Math.min(100, ((totalMs - left) / totalMs) * 100);
-                          bar.style.width = (100 - pct) + '%';
-
-                          if (left > 0) {{
-                            setTimeout(tick, 500);
-                          }} else {{
-                            el.textContent = '⏰ Time Remaining: 00:00';
-                            bar.style.width = '0%';
-                            if (!firedExpiry) {{
-                              firedExpiry = true;
-                              triggerExpiry();
-                            }}
-                          }}
-                        }}
-                        tick();
-                      }})();
-                    </script>
-                    """, height=90, scrolling=False)
-                    # ── END CLIENT-SIDE TIMER ──────────────────────────────────────────────
+                    # ── TIMER ─────────────────────────────────────────────────────────────
+                    # Calls the module-level fragment defined at the top of this file.
+                    # Only the timer reruns every second — the rest of the page is stable.
+                    _render_interview_timer()
+                    # ── END TIMER ─────────────────────────────────────────────────────────
 
                     # Question display with phase indicator
                     phase_badge = "📄 Resume-Based Question" if current_index <= num_resume_qs else "💼 Generic Interview Question"
@@ -20194,7 +20139,7 @@ Generate {num_questions} questions now:
 
                     # Auto-submit logic when timer expires
                     # Fires when: (a) Python calculates remaining_time<=0, OR
-                    # (b) JS clicked the hidden trigger button (_timer_force_expired flag)
+                    # (b) st.fragment timer hit zero and set the _timer_force_expired flag
                     _force_expired = st.session_state.pop('_timer_force_expired', False)
                     if (remaining_time <= 0 or _force_expired) and not st.session_state.dynamic_answer_submitted:
                         if not answer.strip():
@@ -20330,9 +20275,8 @@ Generate {num_questions} questions now:
                                     if i < num_to_show - 1:  # Don't add separator after last item
                                         st.markdown("---")
 
-                    # Timer expiry is handled by the JS component clicking the hidden
-                    # __timer_expired__ button above, which causes a natural Streamlit rerun.
-                    # No sleep/rerun loop needed here.
+                    # Timer expiry: the st.fragment above sets _timer_force_expired and calls
+                    # st.rerun() once, which brings the full page through auto-submit logic.
                 else:
                     # CRITICAL FIX: All questions answered, move to completion automatically
                     # Capture exact duration at auto-completion moment
