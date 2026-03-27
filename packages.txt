@@ -1,0 +1,5 @@
+libgl1
+poppler-utils
+tesseract-ocr
+libcairo2-dev
+pkg-config
