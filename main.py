@@ -6521,8 +6521,7 @@ if uploaded_files and job_description:
                 fmt_score,   # ← format_score now saved to DB
             ),
             job_title=job_title,
-            job_description=job_description,
-            resume_text=full_text,   # ← resume content for accurate domain detection
+            job_description=job_description
         )
 
         st.session_state.processed_files.add(uploaded_file.name)
@@ -9181,135 +9180,169 @@ def render_template_navy_prestige(session_state, profile_img_html=""):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TEMPLATE 11 — Slate Gray (Single Column)
+# Layout standardized to match Classic Clean Single Column
 # ─────────────────────────────────────────────────────────────────────────────
 def render_template_slate_gray(session_state, profile_img_html=""):
-    """Slate Gray — single-column, charcoal headings, light gray accents, highly ATS-friendly."""
+    """Slate Gray — single-column, charcoal headings, light gray accents.
+    Layout matches Classic Clean Single Column for consistency."""
     import re as _resg
 
-    fixed_img = ""
-    if profile_img_html:
-        m = _resg.search(r'<img[^>]*>', profile_img_html)
-        if m:
-            tag = _resg.sub(r"style=['\"][^'\"]*['\"]", "", m.group(0))
-            tag = tag.replace("<img ", "<img style='width:96px;height:96px;border-radius:50%;"
-                              "object-fit:cover;object-position:center;border:3px solid #64748b;"
-                              "display:block;margin:0 auto 12px;' ")
-            fixed_img = tag
+    # ── image (same size/style as Classic Clean) ──────────────────────────────
+    def _fix_img(html, size=88):
+        if not html:
+            return ""
+        img_match = _resg.search(r'<img[^>]*>', html)
+        if not img_match:
+            return ""
+        img_tag = img_match.group(0)
+        img_tag = _resg.sub(r"style=['\"][^'\"]*['\"]", "", img_tag)
+        img_tag = img_tag.replace("<img ", f"<img style='width:{size}px;height:{size}px;border-radius:50%;"
+                                  f"object-fit:cover;object-position:center;display:block;margin:0 auto 10px;"
+                                  f"border:2px solid #64748b;' ")
+        return img_tag
 
-    def _sec_sg(title, body):
-        return (f"<div style='margin-bottom:26px;'>"
-                f"<h3 style='font-size:14px;font-weight:700;color:#1e293b;text-transform:uppercase;"
-                f"letter-spacing:1.5px;border-bottom:2px solid #64748b;padding-bottom:5px;margin-bottom:14px;'>{title}</h3>"
-                f"{body}</div>")
+    # ── section header — Slate Gray colour identity, Classic Clean structure ──
+    def section(title, content):
+        return f"""
+        <div style='margin-bottom:24px;'>
+            <h2 style='font-size:14px;font-weight:700;letter-spacing:2px;text-transform:uppercase;
+                color:#1e293b;border-bottom:2px solid #64748b;padding-bottom:4px;margin-bottom:14px;'>{title}</h2>
+            {content}
+        </div>"""
 
-    def _tags_sg(s, bg="#f1f5f9", color="#1e293b", border="#cbd5e1"):
+    # ── skill / tag pills — Slate Gray palette ────────────────────────────────
+    def pills(s, bg="#f1f5f9", color="#1e293b", border="#cbd5e1"):
         return "".join(
             f"<span style='display:inline-block;background:{bg};color:{color};border:1px solid {border};"
-            f"border-radius:4px;padding:4px 11px;margin:3px 4px 3px 0;font-size:12px;font-weight:600;'>{x.strip()}</span>"
+            f"border-radius:4px;padding:4px 12px;margin:4px 4px 4px 0;font-size:13px;font-weight:600;'>{x.strip()}</span>"
             for x in s.split(',') if x.strip())
 
-    contact_parts_sg = []
-    for key, label in [('location',''),('phone',''),('email',''),('linkedin','LinkedIn'),('portfolio','Portfolio')]:
-        val = session_state.get(key, '')
-        if not val:
-            continue
+    # ── contact line — identical structure to Classic Clean ───────────────────
+    def _contact_link(key, val):
         if key == 'email':
-            contact_parts_sg.append(f"<a href='mailto:{val}' style='color:#1e293b;text-decoration:none;font-weight:500;'>{val}</a>")
-        elif key in ('linkedin','portfolio'):
+            return f"<a href='mailto:{val}' style='color:#1e293b;text-decoration:none;'>{val}</a>"
+        elif key in ('linkedin', 'portfolio', 'github'):
             href = val if val.startswith('http') else f"https://{val}"
-            contact_parts_sg.append(f"<a href='{href}' target='_blank' style='color:#1e293b;text-decoration:none;font-weight:500;'>{label}: {val}</a>")
+            return f"<a href='{href}' target='_blank' style='color:#1e293b;text-decoration:none;'>{val}</a>"
         else:
-            contact_parts_sg.append(f"<span style='color:#334155;'>{val}</span>")
-    contact_html_sg = " &nbsp;|&nbsp; ".join(contact_parts_sg)
+            return val
 
-    exp_html_sg = ""
+    contact_parts = []
+    for key in ['email', 'phone', 'location', 'linkedin', 'portfolio', 'github']:
+        val = session_state.get(key, '')
+        if val:
+            contact_parts.append(_contact_link(key, val))
+    contact_line = " &nbsp;|&nbsp; ".join(contact_parts)
+
+    # ── experience ────────────────────────────────────────────────────────────
+    experience_html = ""
     for exp in session_state.experience_entries:
         if exp.get('company') or exp.get('title'):
-            desc = _fmt_desc(exp.get('description',''), font_size='13px', color='#334155', line_height='1.75')
-            exp_html_sg += (
-                f"<div style='margin-bottom:18px;'>"
-                f"<div style='display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:4px;'>"
-                f"<strong style='font-size:14px;color:#1e293b;'>{exp.get('title','')}</strong>"
-                f"<span style='font-size:12px;color:#64748b;background:#f1f5f9;padding:2px 8px;border-radius:5px;border:1px solid #e2e8f0;'>{exp.get('duration','')}</span>"
-                f"</div>"
-                f"<div style='font-size:13px;color:#475569;font-weight:600;margin-bottom:5px;'>{exp.get('company','')}</div>"
-                f"<div>{desc}</div></div>"
-                f"<div style='border-bottom:1px solid #e2e8f0;margin-bottom:10px;'></div>"
-            )
+            desc = _fmt_desc(exp.get('description', ''), font_size='14px', color='#334155', line_height='1.75')
+            experience_html += f"""
+            <div style='margin-bottom:18px;'>
+                <div style='display:flex;justify-content:space-between;align-items:baseline;'>
+                    <strong style='font-size:16px;color:#1e293b;'>{exp.get('company','')}</strong>
+                    <span style='font-size:13px;color:#64748b;'>{exp.get('duration','')}</span>
+                </div>
+                <div style='font-size:14px;color:#475569;font-weight:600;font-style:italic;margin-bottom:6px;'>{exp.get('title','')}</div>
+                <div style='font-size:14px;color:#334155;line-height:1.7;'>{desc}</div>
+            </div>
+            <hr style='border:none;border-top:1px solid #e2e8f0;margin:12px 0;'>"""
 
-    edu_html_sg = ""
+    # ── education ─────────────────────────────────────────────────────────────
+    education_html = ""
     for edu in session_state.education_entries:
-        if edu.get('institution'):
-            dv = edu.get('degree','')
+        if edu.get('institution') or edu.get('degree'):
+            dv = edu.get('degree', '')
             if isinstance(dv, list):
                 dv = ", ".join(dv)
-            edu_html_sg += (
-                f"<div style='margin-bottom:12px;'>"
-                f"<div style='display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:4px;'>"
-                f"<strong style='font-size:13px;color:#1e293b;'>{edu.get('institution','')}</strong>"
-                f"<span style='font-size:12px;color:#64748b;'>{edu.get('year','')}</span>"
-                f"</div>"
-                f"<div style='font-size:13px;color:#475569;font-style:italic;font-weight:600;'>{dv}</div>"
-                f"<div style='font-size:12px;color:#64748b;'>{edu.get('details','')}</div></div>"
-            )
+            education_html += f"""
+            <div style='margin-bottom:14px;'>
+                <div style='display:flex;justify-content:space-between;'>
+                    <strong style='font-size:15px;color:#1e293b;'>{edu.get('institution','')}</strong>
+                    <span style='font-size:13px;color:#64748b;'>{edu.get('year','')}</span>
+                </div>
+                <div style='font-size:14px;color:#64748b;font-style:italic;'>{dv}</div>
+                <div style='font-size:13px;color:#94a3b8;'>{edu.get('details','')}</div>
+            </div>"""
 
-    proj_html_sg = ""
-    proj_links_all_sg = getattr(session_state, 'project_links', []) or []
+    # ── projects ──────────────────────────────────────────────────────────────
+    projects_html = ""
+    proj_links = getattr(session_state, 'project_links', []) or []
     for idx, proj in enumerate(session_state.project_entries):
         if proj.get('title'):
-            desc = _fmt_desc(proj.get('description',''), font_size='13px', color='#334155', line_height='1.75')
-            pl = ""
-            if idx < len(proj_links_all_sg) and proj_links_all_sg[idx]:
-                pl = (f"<div style='margin-top:4px;'><a href='{proj_links_all_sg[idx]}' target='_blank' "
-                      f"style='color:#475569;font-size:12px;font-weight:600;'>&#128279; View Project</a></div>")
-            proj_html_sg += (
-                f"<div style='margin-bottom:16px;padding:12px;background:#f8fafc;"
-                f"border-radius:6px;border:1px solid #e2e8f0;'>"
-                f"<div style='display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;'>"
-                f"<strong style='font-size:13px;color:#1e293b;'>{proj.get('title','')}</strong>"
-                f"<span style='font-size:12px;color:#64748b;'>{proj.get('duration','')}</span>"
-                f"</div>"
-                f"<div style='font-size:12px;color:#475569;font-weight:600;margin-bottom:3px;'>Tech: {proj.get('tech','')}</div>"
-                f"<div>{desc}</div>{pl}</div>"
-            )
+            desc = _fmt_desc(proj.get('description', ''), font_size='14px', color='#334155', line_height='1.75')
+            proj_link_html = ""
+            if idx < len(proj_links) and proj_links[idx]:
+                proj_link_html = (f"<div style='margin-top:5px;font-size:13px;'>"
+                                  f"<a href='{proj_links[idx]}' target='_blank' style='color:#475569;font-weight:600;'>&#128279; View Project / GitHub</a></div>")
+            projects_html += f"""
+            <div style='margin-bottom:16px;'>
+                <div style='display:flex;justify-content:space-between;'>
+                    <strong style='font-size:15px;color:#1e293b;'>{proj.get('title','')}</strong>
+                    <span style='font-size:13px;color:#64748b;'>{proj.get('duration','')}</span>
+                </div>
+                <div style='font-size:13px;color:#64748b;margin-bottom:4px;'><b>Tech:</b> {proj.get('tech','')}</div>
+                <div style='font-size:14px;color:#334155;line-height:1.6;'>{desc}</div>
+                {proj_link_html}
+            </div>"""
 
-    cert_html_sg = ""
+    # ── all project links ─────────────────────────────────────────────────────
+    all_links_html = ""
+    proj_links_all = getattr(session_state, 'project_links', []) or []
+    if proj_links_all:
+        all_links_html = "".join(
+            f"<div style='margin-bottom:6px;'><a href='{lnk}' target='_blank' style='color:#475569;font-weight:600;font-size:14px;'>&#128279; Project {i+1}: {lnk}</a></div>"
+            for i, lnk in enumerate(proj_links_all) if lnk)
+
+    # ── certifications ────────────────────────────────────────────────────────
+    cert_html = ""
     for cert in session_state.certificate_links:
         if cert.get('name'):
-            cert_html_sg += (
-                f"<div style='margin-bottom:10px;'>"
-                f"<a href='{cert.get('link','#')}' target='_blank' style='font-size:13px;font-weight:700;color:#1e293b;text-decoration:none;'>{cert.get('name','')}</a>"
-                f"<span style='font-size:12px;color:#64748b;'> — {cert.get('duration','')}</span></div>"
-            )
+            desc = _fmt_desc(cert.get('description', ''), font_size='13px', color='#64748b', line_height='1.7')
+            cert_html += f"""
+            <div style='margin-bottom:12px;'>
+                <div style='display:flex;justify-content:space-between;'>
+                    <a href='{cert.get("link","#")}' target='_blank' style='font-weight:600;color:#1e293b;font-size:15px;text-decoration:none;'>{cert.get("name","")}</a>
+                    <span style='font-size:13px;color:#64748b;'>{cert.get("duration","")}</span>
+                </div>
+                <div style='font-size:13px;color:#64748b;'>{desc}</div>
+            </div>"""
 
-    proj_links_sec_sg = ""
-    if session_state.project_links:
-        proj_links_sec_sg = "".join(
-            f"<div style='margin-bottom:5px;'><a href='{lnk}' target='_blank' style='color:#475569;font-size:13px;font-weight:600;'>&#128279; Project {i+1}: {lnk}</a></div>"
-            for i, lnk in enumerate(session_state.project_links) if lnk)
-
-    summary_html_sg = _fmt_desc(session_state.get('summary',''), font_size='13px', color='#334155', line_height='1.8')
+    summary_html = _fmt_desc(session_state.get('summary', ''), font_size='14px', color='#334155', line_height='1.8')
+    fixed_img = _fix_img(profile_img_html)
+    job_title_line = (f"<div style='font-size:16px;color:#475569;font-weight:600;margin-top:4px;'>"
+                      f"{session_state.get('job_title','')}</div>") if session_state.get('job_title', '') else ""
 
     html_content = f"""<!DOCTYPE html>
 <html lang='en'>
-<head><meta charset='UTF-8'><title>{session_state.get('name','')} - Resume</title></head>
-<body style="font-family:'Segoe UI',Arial,sans-serif;line-height:1.6;color:#1e293b;background:#ffffff;max-width:860px;margin:0 auto;padding:36px 40px;">
-  {fixed_img if fixed_img else ''}
-  <div style="text-align:center;margin-bottom:28px;padding-bottom:18px;border-bottom:3px solid #64748b;">
-    <h1 style="font-size:28px;font-weight:800;color:#1e293b;margin-bottom:4px;">{session_state.get('name','')}</h1>
-    <div style="font-size:15px;color:#475569;font-weight:600;margin-bottom:10px;">{session_state.get('job_title','')}</div>
-    <div style="font-size:12px;color:#334155;line-height:2;">{contact_html_sg}</div>
+<head><meta charset='UTF-8'><title>{session_state.get('name','')} - Resume</title>
+<style>
+  * {{ box-sizing:border-box; margin:0; padding:0; }}
+  body {{ font-family:'Segoe UI',Arial,sans-serif; color:#1e293b; background:#ffffff; padding:40px 60px; line-height:1.6; }}
+  a {{ color:#475569; }}
+</style>
+</head>
+<body>
+  <div style='text-align:center;margin-bottom:6px;'>
+    {fixed_img}
+    <h1 style='font-size:32px;font-weight:700;letter-spacing:1px;color:#1e293b;'>{session_state.get('name','')}</h1>
+    {job_title_line}
+    <div style='font-size:13px;color:#64748b;margin-top:6px;'>{contact_line}</div>
   </div>
-  {_sec_sg("Professional Summary", f"<div style='font-size:13px;color:#334155;line-height:1.8;padding:12px 14px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;'>{summary_html_sg}</div>") if summary_html_sg else ''}
-  {_sec_sg("Work Experience", exp_html_sg) if exp_html_sg else ''}
-  {_sec_sg("Education", edu_html_sg) if edu_html_sg else ''}
-  {_sec_sg("Projects", proj_html_sg) if proj_html_sg else ''}
-  {_sec_sg("Technical Skills", f"<div style='padding:6px 0;'>{_tags_sg(session_state.get('skills',''))}</div>") if session_state.get('skills','').strip() else ''}
-  {_sec_sg("Core Competencies", f"<div style='padding:6px 0;'>{_tags_sg(session_state.get('Softskills',''),'#f0f9ff','#0c4a6e','#bae6fd')}</div>") if session_state.get('Softskills','').strip() else ''}
-  {_sec_sg("Languages", f"<div style='padding:6px 0;'>{_tags_sg(session_state.get('languages',''),'#f0fdf4','#14532d','#bbf7d0')}</div>") if session_state.get('languages','').strip() else ''}
-  {_sec_sg("Interests", f"<div style='padding:6px 0;'>{_tags_sg(session_state.get('interests',''),'#fdf4ff','#581c87','#e9d5ff')}</div>") if session_state.get('interests','').strip() else ''}
-  {_sec_sg("Certifications", cert_html_sg) if cert_html_sg else ''}
-  {_sec_sg("Project Links", proj_links_sec_sg) if proj_links_sec_sg else ''}
+  <hr style='border:none;border-top:3px solid #64748b;margin:16px 0 24px 0;'>
+
+  {section("Professional Summary", summary_html) if summary_html else ''}
+  {section("Work Experience", experience_html) if experience_html else ''}
+  {section("Education", education_html) if education_html else ''}
+  {section("Technical Skills", pills(session_state.get('skills',''))) if session_state.get('skills') else ''}
+  {section("Core Competencies", pills(session_state.get('Softskills',''),'#f0f9ff','#0c4a6e','#bae6fd')) if session_state.get('Softskills') else ''}
+  {section("Languages", pills(session_state.get('languages',''),'#f0fdf4','#14532d','#bbf7d0')) if session_state.get('languages') else ''}
+  {section("Interests", pills(session_state.get('interests',''),'#fdf4ff','#581c87','#e9d5ff')) if session_state.get('interests') else ''}
+  {section("Projects", projects_html) if projects_html else ''}
+  {section("Project Links", all_links_html) if all_links_html else ''}
+  {section("Certifications", cert_html) if cert_html else ''}
 </body></html>"""
 
     return html_content
@@ -9476,135 +9509,170 @@ def render_template_teal_impact(session_state, profile_img_html=""):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TEMPLATE 13 — Burgundy Classic (Single Column)
+# Layout standardized to match Classic Clean Single Column
 # ─────────────────────────────────────────────────────────────────────────────
 def render_template_burgundy_classic(session_state, profile_img_html=""):
-    """Burgundy Classic — single-column, deep burgundy headers, ivory background, ATS-friendly."""
+    """Burgundy Classic — single-column, deep burgundy headers, ivory background.
+    Layout matches Classic Clean Single Column for consistency."""
     import re as _rebc
 
-    fixed_img = ""
-    if profile_img_html:
-        m = _rebc.search(r'<img[^>]*>', profile_img_html)
-        if m:
-            tag = _rebc.sub(r"style=['\"][^'\"]*['\"]", "", m.group(0))
-            tag = tag.replace("<img ", "<img style='width:96px;height:96px;border-radius:50%;"
-                              "object-fit:cover;object-position:center;border:3px solid #7f1d1d;"
-                              "display:block;margin:0 auto 12px;' ")
-            fixed_img = tag
+    # ── image (same size/approach as Classic Clean) ───────────────────────────
+    def _fix_img(html, size=88):
+        if not html:
+            return ""
+        img_match = _rebc.search(r'<img[^>]*>', html)
+        if not img_match:
+            return ""
+        img_tag = img_match.group(0)
+        img_tag = _rebc.sub(r"style=['\"][^'\"]*['\"]", "", img_tag)
+        img_tag = img_tag.replace("<img ", f"<img style='width:{size}px;height:{size}px;border-radius:50%;"
+                                  f"object-fit:cover;object-position:center;display:block;margin:0 auto 10px;"
+                                  f"border:2px solid #7f1d1d;' ")
+        return img_tag
 
-    def _sec_bc(title, body):
-        return (f"<div style='margin-bottom:26px;'>"
-                f"<h3 style='font-size:14px;font-weight:700;color:#7f1d1d;text-transform:uppercase;"
-                f"letter-spacing:2px;border-bottom:2px solid #991b1b;padding-bottom:5px;margin-bottom:14px;'>{title}</h3>"
-                f"{body}</div>")
+    # ── section — Burgundy colour identity, Classic Clean structure ───────────
+    def section(title, content):
+        return f"""
+        <div style='margin-bottom:24px;'>
+            <h2 style='font-size:14px;font-weight:700;letter-spacing:2px;text-transform:uppercase;
+                color:#7f1d1d;border-bottom:2px solid #991b1b;padding-bottom:4px;margin-bottom:14px;
+                font-family:"Georgia",serif;'>{title}</h2>
+            {content}
+        </div>"""
 
-    def _tags_bc(s, bg="#fef2f2", color="#7f1d1d", border="#fecaca"):
+    # ── skill pills — Burgundy palette ────────────────────────────────────────
+    def pills(s, bg="#fef2f2", color="#7f1d1d", border="#fecaca"):
         return "".join(
             f"<span style='display:inline-block;background:{bg};color:{color};border:1px solid {border};"
-            f"border-radius:4px;padding:4px 11px;margin:3px 4px 3px 0;font-size:12px;font-weight:600;'>{x.strip()}</span>"
+            f"border-radius:4px;padding:4px 12px;margin:4px 4px 4px 0;font-size:13px;font-weight:600;'>{x.strip()}</span>"
             for x in s.split(',') if x.strip())
 
-    contact_parts_bc = []
-    for key, label in [('location',''),('phone',''),('email',''),('linkedin','LinkedIn'),('portfolio','Portfolio')]:
-        val = session_state.get(key, '')
-        if not val:
-            continue
+    # ── contact line — identical structure to Classic Clean ───────────────────
+    def _contact_link(key, val):
         if key == 'email':
-            contact_parts_bc.append(f"<a href='mailto:{val}' style='color:#7f1d1d;text-decoration:none;font-weight:500;'>{val}</a>")
-        elif key in ('linkedin','portfolio'):
+            return f"<a href='mailto:{val}' style='color:#7f1d1d;text-decoration:none;'>{val}</a>"
+        elif key in ('linkedin', 'portfolio', 'github'):
             href = val if val.startswith('http') else f"https://{val}"
-            contact_parts_bc.append(f"<a href='{href}' target='_blank' style='color:#7f1d1d;text-decoration:none;font-weight:500;'>{label}: {val}</a>")
+            return f"<a href='{href}' target='_blank' style='color:#7f1d1d;text-decoration:none;'>{val}</a>"
         else:
-            contact_parts_bc.append(f"<span style='color:#3f1212;'>{val}</span>")
-    contact_html_bc = " &nbsp;|&nbsp; ".join(contact_parts_bc)
+            return val
 
-    exp_html_bc = ""
+    contact_parts = []
+    for key in ['email', 'phone', 'location', 'linkedin', 'portfolio', 'github']:
+        val = session_state.get(key, '')
+        if val:
+            contact_parts.append(_contact_link(key, val))
+    contact_line = " &nbsp;|&nbsp; ".join(contact_parts)
+
+    # ── experience ────────────────────────────────────────────────────────────
+    experience_html = ""
     for exp in session_state.experience_entries:
         if exp.get('company') or exp.get('title'):
-            desc = _fmt_desc(exp.get('description',''), font_size='13px', color='#1c1c1c', line_height='1.75')
-            exp_html_bc += (
-                f"<div style='margin-bottom:18px;padding-left:12px;border-left:3px solid #991b1b;'>"
-                f"<div style='display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:4px;'>"
-                f"<strong style='font-size:14px;color:#7f1d1d;'>{exp.get('title','')}</strong>"
-                f"<span style='font-size:12px;color:#6b7280;background:#fef2f2;padding:2px 8px;border-radius:5px;border:1px solid #fecaca;'>{exp.get('duration','')}</span>"
-                f"</div>"
-                f"<div style='font-size:13px;color:#374151;font-weight:600;margin-bottom:5px;'>{exp.get('company','')}</div>"
-                f"<div>{desc}</div></div>"
-                f"<div style='border-bottom:1px solid #fde8e8;margin-bottom:10px;'></div>"
-            )
+            desc = _fmt_desc(exp.get('description', ''), font_size='14px', color='#1c1c1c', line_height='1.75')
+            experience_html += f"""
+            <div style='margin-bottom:18px;'>
+                <div style='display:flex;justify-content:space-between;align-items:baseline;'>
+                    <strong style='font-size:16px;color:#1c1c1c;'>{exp.get('company','')}</strong>
+                    <span style='font-size:13px;color:#6b7280;'>{exp.get('duration','')}</span>
+                </div>
+                <div style='font-size:14px;color:#7f1d1d;font-weight:600;font-style:italic;margin-bottom:6px;'>{exp.get('title','')}</div>
+                <div style='font-size:14px;color:#1c1c1c;line-height:1.7;'>{desc}</div>
+            </div>
+            <hr style='border:none;border-top:1px solid #fde8e8;margin:12px 0;'>"""
 
-    edu_html_bc = ""
+    # ── education ─────────────────────────────────────────────────────────────
+    education_html = ""
     for edu in session_state.education_entries:
-        if edu.get('institution'):
-            dv = edu.get('degree','')
+        if edu.get('institution') or edu.get('degree'):
+            dv = edu.get('degree', '')
             if isinstance(dv, list):
                 dv = ", ".join(dv)
-            edu_html_bc += (
-                f"<div style='margin-bottom:12px;padding-left:12px;border-left:3px solid #991b1b;'>"
-                f"<div style='display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:4px;'>"
-                f"<strong style='font-size:13px;color:#7f1d1d;'>{edu.get('institution','')}</strong>"
-                f"<span style='font-size:12px;color:#6b7280;'>{edu.get('year','')}</span>"
-                f"</div>"
-                f"<div style='font-size:13px;color:#374151;font-style:italic;font-weight:600;'>{dv}</div>"
-                f"<div style='font-size:12px;color:#6b7280;'>{edu.get('details','')}</div></div>"
-            )
+            education_html += f"""
+            <div style='margin-bottom:14px;'>
+                <div style='display:flex;justify-content:space-between;'>
+                    <strong style='font-size:15px;color:#1c1c1c;'>{edu.get('institution','')}</strong>
+                    <span style='font-size:13px;color:#6b7280;'>{edu.get('year','')}</span>
+                </div>
+                <div style='font-size:14px;color:#6b7280;font-style:italic;'>{dv}</div>
+                <div style='font-size:13px;color:#9ca3af;'>{edu.get('details','')}</div>
+            </div>"""
 
-    proj_html_bc = ""
-    proj_links_all_bc = getattr(session_state, 'project_links', []) or []
+    # ── projects ──────────────────────────────────────────────────────────────
+    projects_html = ""
+    proj_links = getattr(session_state, 'project_links', []) or []
     for idx, proj in enumerate(session_state.project_entries):
         if proj.get('title'):
-            desc = _fmt_desc(proj.get('description',''), font_size='13px', color='#1c1c1c', line_height='1.75')
-            pl = ""
-            if idx < len(proj_links_all_bc) and proj_links_all_bc[idx]:
-                pl = (f"<div style='margin-top:4px;'><a href='{proj_links_all_bc[idx]}' target='_blank' "
-                      f"style='color:#991b1b;font-size:12px;font-weight:600;'>&#128279; View Project</a></div>")
-            proj_html_bc += (
-                f"<div style='margin-bottom:14px;padding:10px 12px;background:#fffafa;"
-                f"border-radius:6px;border:1px solid #fde8e8;'>"
-                f"<div style='display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;'>"
-                f"<strong style='font-size:13px;color:#7f1d1d;'>{proj.get('title','')}</strong>"
-                f"<span style='font-size:12px;color:#6b7280;'>{proj.get('duration','')}</span>"
-                f"</div>"
-                f"<div style='font-size:12px;color:#374151;font-weight:600;margin-bottom:3px;'>Tech: {proj.get('tech','')}</div>"
-                f"<div>{desc}</div>{pl}</div>"
-            )
+            desc = _fmt_desc(proj.get('description', ''), font_size='14px', color='#1c1c1c', line_height='1.75')
+            proj_link_html = ""
+            if idx < len(proj_links) and proj_links[idx]:
+                proj_link_html = (f"<div style='margin-top:5px;font-size:13px;'>"
+                                  f"<a href='{proj_links[idx]}' target='_blank' style='color:#991b1b;font-weight:600;'>&#128279; View Project / GitHub</a></div>")
+            projects_html += f"""
+            <div style='margin-bottom:16px;'>
+                <div style='display:flex;justify-content:space-between;'>
+                    <strong style='font-size:15px;color:#7f1d1d;'>{proj.get('title','')}</strong>
+                    <span style='font-size:13px;color:#6b7280;'>{proj.get('duration','')}</span>
+                </div>
+                <div style='font-size:13px;color:#6b7280;margin-bottom:4px;'><b>Tech:</b> {proj.get('tech','')}</div>
+                <div style='font-size:14px;color:#1c1c1c;line-height:1.6;'>{desc}</div>
+                {proj_link_html}
+            </div>"""
 
-    cert_html_bc = ""
+    # ── all project links ─────────────────────────────────────────────────────
+    all_links_html = ""
+    proj_links_all = getattr(session_state, 'project_links', []) or []
+    if proj_links_all:
+        all_links_html = "".join(
+            f"<div style='margin-bottom:6px;'><a href='{lnk}' target='_blank' style='color:#991b1b;font-weight:600;font-size:14px;'>&#128279; Project {i+1}: {lnk}</a></div>"
+            for i, lnk in enumerate(proj_links_all) if lnk)
+
+    # ── certifications ────────────────────────────────────────────────────────
+    cert_html = ""
     for cert in session_state.certificate_links:
         if cert.get('name'):
-            cert_html_bc += (
-                f"<div style='margin-bottom:10px;padding-left:10px;border-left:2px solid #fca5a5;'>"
-                f"<a href='{cert.get('link','#')}' target='_blank' style='font-size:13px;font-weight:700;color:#7f1d1d;text-decoration:none;'>{cert.get('name','')}</a>"
-                f"<span style='font-size:12px;color:#6b7280;'> — {cert.get('duration','')}</span></div>"
-            )
+            desc = _fmt_desc(cert.get('description', ''), font_size='13px', color='#6b7280', line_height='1.7')
+            cert_html += f"""
+            <div style='margin-bottom:12px;'>
+                <div style='display:flex;justify-content:space-between;'>
+                    <a href='{cert.get("link","#")}' target='_blank' style='font-weight:600;color:#7f1d1d;font-size:15px;text-decoration:none;'>{cert.get("name","")}</a>
+                    <span style='font-size:13px;color:#6b7280;'>{cert.get("duration","")}</span>
+                </div>
+                <div style='font-size:13px;color:#6b7280;'>{desc}</div>
+            </div>"""
 
-    proj_links_sec_bc = ""
-    if session_state.project_links:
-        proj_links_sec_bc = "".join(
-            f"<div style='margin-bottom:5px;'><a href='{lnk}' target='_blank' style='color:#991b1b;font-size:13px;font-weight:600;'>&#128279; Project {i+1}</a></div>"
-            for i, lnk in enumerate(session_state.project_links) if lnk)
-
-    summary_html_bc = _fmt_desc(session_state.get('summary',''), font_size='13px', color='#1c1c1c', line_height='1.8')
+    summary_html = _fmt_desc(session_state.get('summary', ''), font_size='14px', color='#1c1c1c', line_height='1.8')
+    fixed_img = _fix_img(profile_img_html)
+    job_title_line = (f"<div style='font-size:16px;color:#7f1d1d;font-weight:600;margin-top:4px;"
+                      f"letter-spacing:0.5px;'>{session_state.get('job_title','')}</div>") if session_state.get('job_title', '') else ""
 
     html_content = f"""<!DOCTYPE html>
 <html lang='en'>
-<head><meta charset='UTF-8'><title>{session_state.get('name','')} - Resume</title></head>
-<body style="font-family:'Georgia',serif;line-height:1.6;color:#1c1c1c;background:#fffafa;max-width:860px;margin:0 auto;padding:36px 40px;">
-  {fixed_img if fixed_img else ''}
-  <div style="text-align:center;margin-bottom:28px;padding-bottom:18px;border-bottom:3px double #991b1b;">
-    <h1 style="font-size:28px;font-weight:800;color:#7f1d1d;margin-bottom:4px;font-family:'Georgia',serif;">{session_state.get('name','')}</h1>
-    <div style="font-size:15px;color:#374151;font-weight:600;margin-bottom:10px;letter-spacing:1px;">{session_state.get('job_title','')}</div>
-    <div style="font-size:12px;color:#3f1212;line-height:2;">{contact_html_bc}</div>
+<head><meta charset='UTF-8'><title>{session_state.get('name','')} - Resume</title>
+<style>
+  * {{ box-sizing:border-box; margin:0; padding:0; }}
+  body {{ font-family:'Georgia',serif; color:#1c1c1c; background:#fffafa; padding:40px 60px; line-height:1.6; }}
+  a {{ color:#7f1d1d; }}
+</style>
+</head>
+<body>
+  <div style='text-align:center;margin-bottom:6px;'>
+    {fixed_img}
+    <h1 style='font-size:32px;font-weight:700;letter-spacing:1px;color:#7f1d1d;font-family:"Georgia",serif;'>{session_state.get('name','')}</h1>
+    {job_title_line}
+    <div style='font-size:13px;color:#6b7280;margin-top:6px;'>{contact_line}</div>
   </div>
-  {_sec_bc("Professional Summary", f"<div style='font-size:13px;color:#1c1c1c;line-height:1.8;padding:12px 14px;background:#fff5f5;border-radius:6px;border:1px solid #fecaca;'>{summary_html_bc}</div>") if summary_html_bc else ''}
-  {_sec_bc("Work Experience", exp_html_bc) if exp_html_bc else ''}
-  {_sec_bc("Education", edu_html_bc) if edu_html_bc else ''}
-  {_sec_bc("Projects", proj_html_bc) if proj_html_bc else ''}
-  {_sec_bc("Technical Skills", f"<div style='padding:6px 0;'>{_tags_bc(session_state.get('skills',''))}</div>") if session_state.get('skills','').strip() else ''}
-  {_sec_bc("Core Competencies", f"<div style='padding:6px 0;'>{_tags_bc(session_state.get('Softskills',''),'#fff7ed','#78350f','#fed7aa')}</div>") if session_state.get('Softskills','').strip() else ''}
-  {_sec_bc("Languages", f"<div style='padding:6px 0;'>{_tags_bc(session_state.get('languages',''),'#f0fdf4','#14532d','#bbf7d0')}</div>") if session_state.get('languages','').strip() else ''}
-  {_sec_bc("Interests", f"<div style='padding:6px 0;'>{_tags_bc(session_state.get('interests',''),'#fdf4ff','#581c87','#e9d5ff')}</div>") if session_state.get('interests','').strip() else ''}
-  {_sec_bc("Certifications", cert_html_bc) if cert_html_bc else ''}
-  {_sec_bc("Project Links", proj_links_sec_bc) if proj_links_sec_bc else ''}
+  <hr style='border:none;border-top:3px double #991b1b;margin:16px 0 24px 0;'>
+
+  {section("Professional Summary", summary_html) if summary_html else ''}
+  {section("Work Experience", experience_html) if experience_html else ''}
+  {section("Education", education_html) if education_html else ''}
+  {section("Technical Skills", pills(session_state.get('skills',''))) if session_state.get('skills') else ''}
+  {section("Core Competencies", pills(session_state.get('Softskills',''),'#fff7ed','#78350f','#fed7aa')) if session_state.get('Softskills') else ''}
+  {section("Languages", pills(session_state.get('languages',''),'#f0fdf4','#14532d','#bbf7d0')) if session_state.get('languages') else ''}
+  {section("Interests", pills(session_state.get('interests',''),'#fdf4ff','#581c87','#e9d5ff')) if session_state.get('interests') else ''}
+  {section("Projects", projects_html) if projects_html else ''}
+  {section("Project Links", all_links_html) if all_links_html else ''}
+  {section("Certifications", cert_html) if cert_html else ''}
 </body></html>"""
 
     return html_content
@@ -9905,6 +9973,504 @@ def render_template_forest_green(session_state, profile_img_html=""):
     return html_content
 
 
+# =============================================================================
+# COVER LETTER TEMPLATES (6 industry-standard styles)
+# =============================================================================
+
+def render_cover_letter_professional(data):
+    """
+    Cover Letter Template 1 — Professional / Corporate
+    Clean, formal, navy accents. Ideal for finance, law, consulting, banking.
+    data keys: name, job_title, email, phone, location, linkedin,
+               company, hiring_manager, role, date, body_paragraphs (list of str)
+    """
+    name          = data.get("name", "Your Name")
+    job_title     = data.get("job_title", "")
+    email         = data.get("email", "")
+    phone         = data.get("phone", "")
+    location      = data.get("location", "")
+    linkedin      = data.get("linkedin", "")
+    company       = data.get("company", "Hiring Company")
+    hiring_manager= data.get("hiring_manager", "Hiring Manager")
+    role          = data.get("role", "the position")
+    date_str      = data.get("date", "")
+    paragraphs    = data.get("body_paragraphs", [
+        "I am writing to express my strong interest in the [Role] position at [Company]. With my background in [Field], I am confident that I can make a meaningful contribution to your team.",
+        "Throughout my career, I have developed expertise in [Key Skills]. In my previous role at [Previous Company], I successfully [Key Achievement], which demonstrates my ability to deliver results in a fast-paced environment.",
+        "I am particularly drawn to [Company] because of [Specific Reason]. I am excited about the opportunity to bring my skills in [Relevant Skills] to your organization and help achieve [Company Goal].",
+    ])
+
+    contact_parts = []
+    if email:    contact_parts.append(f"<a href='mailto:{email}' style='color:#1e3a5f;text-decoration:none;'>{email}</a>")
+    if phone:    contact_parts.append(f"<span>{phone}</span>")
+    if location: contact_parts.append(f"<span>{location}</span>")
+    if linkedin:
+        href = linkedin if linkedin.startswith('http') else f"https://{linkedin}"
+        contact_parts.append(f"<a href='{href}' target='_blank' style='color:#1e3a5f;text-decoration:none;'>{linkedin}</a>")
+    contact_line = " &nbsp;|&nbsp; ".join(contact_parts)
+
+    paras_html = "".join(
+        f"<p style='margin-bottom:16px;font-size:14px;color:#1a1a1a;line-height:1.8;text-align:justify;'>{p}</p>"
+        for p in paragraphs
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang='en'>
+<head><meta charset='UTF-8'><title>Cover Letter — {name}</title>
+<style>
+  * {{ box-sizing:border-box; margin:0; padding:0; }}
+  body {{ font-family:'Georgia',serif; background:#fff; color:#1a1a1a; padding:50px 70px; line-height:1.6; }}
+</style>
+</head>
+<body>
+  <!-- HEADER -->
+  <div style='border-bottom:3px solid #1e3a5f;padding-bottom:18px;margin-bottom:28px;'>
+    <h1 style='font-size:30px;font-weight:700;color:#1e3a5f;letter-spacing:1px;margin-bottom:4px;'>{name}</h1>
+    {f"<div style='font-size:15px;color:#374151;font-weight:600;margin-bottom:8px;'>{job_title}</div>" if job_title else ''}
+    <div style='font-size:13px;color:#555;'>{contact_line}</div>
+  </div>
+
+  <!-- DATE -->
+  {f"<p style='font-size:14px;color:#374151;margin-bottom:20px;'>{date_str}</p>" if date_str else ''}
+
+  <!-- RECIPIENT -->
+  <div style='margin-bottom:24px;'>
+    <p style='font-size:14px;font-weight:600;color:#1a1a1a;'>{hiring_manager}</p>
+    <p style='font-size:14px;color:#374151;'>{company}</p>
+  </div>
+
+  <!-- GREETING -->
+  <p style='font-size:14px;color:#1a1a1a;margin-bottom:20px;'>Dear {hiring_manager},</p>
+
+  <!-- BODY -->
+  {paras_html}
+
+  <!-- CLOSING -->
+  <p style='font-size:14px;color:#1a1a1a;margin-bottom:6px;'>I would welcome the opportunity to discuss how my experience aligns with the needs of {company}. Thank you for your time and consideration.</p>
+  <p style='font-size:14px;color:#1a1a1a;margin-top:28px;'>Sincerely,</p>
+  <p style='font-size:15px;font-weight:700;color:#1e3a5f;margin-top:8px;'>{name}</p>
+  {f"<p style='font-size:13px;color:#555;margin-top:4px;'>{job_title}</p>" if job_title else ''}
+</body></html>"""
+
+
+def render_cover_letter_modern(data):
+    """
+    Cover Letter Template 2 — Modern Minimal
+    Clean white layout with teal accent line. Ideal for startups, tech, design roles.
+    """
+    name          = data.get("name", "Your Name")
+    job_title     = data.get("job_title", "")
+    email         = data.get("email", "")
+    phone         = data.get("phone", "")
+    location      = data.get("location", "")
+    linkedin      = data.get("linkedin", "")
+    company       = data.get("company", "Company Name")
+    hiring_manager= data.get("hiring_manager", "Hiring Manager")
+    role          = data.get("role", "the position")
+    date_str      = data.get("date", "")
+    paragraphs    = data.get("body_paragraphs", [
+        "I'm excited to apply for the [Role] role at [Company]. My background in [Field] and passion for [Domain] make me a strong match for this position.",
+        "In my most recent role, I [Key Achievement], which led to [Quantified Result]. I thrive in environments that value [Culture Trait] and I'm ready to bring that energy to [Company].",
+        "What excites me most about [Company] is [Specific Reason]. I'd love to explore how my skills in [Relevant Skills] can help your team reach its next milestone.",
+    ])
+
+    contact_items = []
+    if email:    contact_items.append(f"<a href='mailto:{email}' style='color:#0d9488;text-decoration:none;'>{email}</a>")
+    if phone:    contact_items.append(phone)
+    if location: contact_items.append(location)
+    if linkedin:
+        href = linkedin if linkedin.startswith('http') else f"https://{linkedin}"
+        contact_items.append(f"<a href='{href}' target='_blank' style='color:#0d9488;text-decoration:none;'>{linkedin}</a>")
+    contact_line = " &nbsp;&middot;&nbsp; ".join(contact_items)
+
+    paras_html = "".join(
+        f"<p style='margin-bottom:14px;font-size:14px;color:#374151;line-height:1.8;'>{p}</p>"
+        for p in paragraphs
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang='en'>
+<head><meta charset='UTF-8'><title>Cover Letter — {name}</title>
+<style>
+  * {{ box-sizing:border-box; margin:0; padding:0; }}
+  body {{ font-family:'Segoe UI',Arial,sans-serif; background:#fff; color:#1f2937; padding:48px 64px; line-height:1.6; }}
+</style>
+</head>
+<body>
+  <!-- HEADER BAND -->
+  <div style='display:flex;justify-content:space-between;align-items:flex-end;border-bottom:4px solid #0d9488;padding-bottom:16px;margin-bottom:32px;'>
+    <div>
+      <h1 style='font-size:28px;font-weight:800;color:#0f172a;letter-spacing:0.5px;margin-bottom:2px;'>{name}</h1>
+      {f"<div style='font-size:14px;color:#0d9488;font-weight:600;'>{job_title}</div>" if job_title else ''}
+    </div>
+    <div style='text-align:right;font-size:12px;color:#6b7280;line-height:1.9;'>{contact_line}</div>
+  </div>
+
+  <!-- DATE + RECIPIENT -->
+  {f"<p style='font-size:13px;color:#6b7280;margin-bottom:16px;'>{date_str}</p>" if date_str else ''}
+  <div style='margin-bottom:20px;'>
+    <p style='font-size:14px;font-weight:600;color:#1f2937;'>{hiring_manager}</p>
+    <p style='font-size:14px;color:#6b7280;'>{company}</p>
+  </div>
+
+  <!-- GREETING -->
+  <p style='font-size:14px;margin-bottom:18px;'>Dear {hiring_manager},</p>
+
+  <!-- BODY -->
+  {paras_html}
+
+  <!-- CLOSING -->
+  <p style='font-size:14px;color:#374151;margin-bottom:30px;'>I'd love the chance to chat about how I can contribute to {company}. Thank you for considering my application.</p>
+  <p style='font-size:14px;'>Best regards,</p>
+  <div style='margin-top:10px;padding-top:10px;border-top:2px solid #0d9488;display:inline-block;'>
+    <p style='font-size:16px;font-weight:700;color:#0f172a;'>{name}</p>
+    {f"<p style='font-size:13px;color:#0d9488;'>{job_title}</p>" if job_title else ''}
+  </div>
+</body></html>"""
+
+
+def render_cover_letter_creative(data):
+    """
+    Cover Letter Template 3 — Creative
+    Bold header with accent colour bar. Ideal for design, marketing, media, content roles.
+    """
+    name          = data.get("name", "Your Name")
+    job_title     = data.get("job_title", "")
+    email         = data.get("email", "")
+    phone         = data.get("phone", "")
+    location      = data.get("location", "")
+    linkedin      = data.get("linkedin", "")
+    portfolio     = data.get("portfolio", "")
+    company       = data.get("company", "Company Name")
+    hiring_manager= data.get("hiring_manager", "Hiring Team")
+    role          = data.get("role", "the position")
+    date_str      = data.get("date", "")
+    accent        = data.get("accent_color", "#7c3aed")
+    paragraphs    = data.get("body_paragraphs", [
+        "Great design solves real problems — and that's exactly the philosophy I bring to every project. I'm applying for [Role] at [Company] because I believe your team's work embodies this principle.",
+        "My background in [Field] has equipped me with [Skills]. At [Previous Company], I led [Project] which resulted in [Outcome]. I'm proud of the process as much as the product.",
+        "I'm inspired by [Company]'s approach to [Specific Work/Campaign/Product]. I would love to contribute my skills in [Creative Skills] to your upcoming projects.",
+    ])
+
+    contact_items = []
+    if email:     contact_items.append(f"<a href='mailto:{email}' style='color:white;text-decoration:none;'>{email}</a>")
+    if phone:     contact_items.append(f"<span style='color:rgba(255,255,255,0.85);'>{phone}</span>")
+    if location:  contact_items.append(f"<span style='color:rgba(255,255,255,0.85);'>{location}</span>")
+    if linkedin:
+        href = linkedin if linkedin.startswith('http') else f"https://{linkedin}"
+        contact_items.append(f"<a href='{href}' target='_blank' style='color:white;text-decoration:none;'>{linkedin}</a>")
+    if portfolio:
+        href = portfolio if portfolio.startswith('http') else f"https://{portfolio}"
+        contact_items.append(f"<a href='{href}' target='_blank' style='color:white;text-decoration:none;'>{portfolio}</a>")
+    contact_line = " &nbsp;&bull;&nbsp; ".join(contact_items)
+
+    paras_html = "".join(
+        f"<p style='margin-bottom:16px;font-size:14px;color:#1f2937;line-height:1.85;'>{p}</p>"
+        for p in paragraphs
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang='en'>
+<head><meta charset='UTF-8'><title>Cover Letter — {name}</title>
+<style>
+  * {{ box-sizing:border-box; margin:0; padding:0; }}
+  body {{ font-family:'Segoe UI',Arial,sans-serif; background:#fff; color:#1f2937; padding:0; line-height:1.6; }}
+</style>
+</head>
+<body>
+  <!-- CREATIVE HEADER BAND -->
+  <div style='background:{accent};padding:36px 56px 28px;'>
+    <h1 style='font-size:32px;font-weight:800;color:#ffffff;letter-spacing:1px;margin-bottom:4px;'>{name}</h1>
+    {f"<div style='font-size:15px;color:rgba(255,255,255,0.85);font-weight:600;margin-bottom:12px;'>{job_title}</div>" if job_title else ''}
+    <div style='font-size:12px;'>{contact_line}</div>
+  </div>
+
+  <!-- BODY AREA -->
+  <div style='padding:40px 56px;'>
+    {f"<p style='font-size:13px;color:#9ca3af;margin-bottom:18px;'>{date_str}</p>" if date_str else ''}
+
+    <div style='margin-bottom:22px;'>
+      <p style='font-size:14px;font-weight:700;color:#1f2937;'>{hiring_manager}</p>
+      <p style='font-size:14px;color:#6b7280;'>{company}</p>
+    </div>
+
+    <p style='font-size:14px;margin-bottom:18px;'>Dear {hiring_manager},</p>
+
+    {paras_html}
+
+    <p style='font-size:14px;color:#374151;margin-bottom:32px;'>I would be thrilled to discuss this further. Thank you for your time — I look forward to hearing from you.</p>
+
+    <p style='font-size:14px;'>Warmly,</p>
+    <p style='font-size:17px;font-weight:800;color:{accent};margin-top:10px;'>{name}</p>
+    {f"<p style='font-size:13px;color:#6b7280;'>{job_title}</p>" if job_title else ''}
+  </div>
+</body></html>"""
+
+
+def render_cover_letter_executive(data):
+    """
+    Cover Letter Template 4 — Executive
+    Sophisticated dark-header layout. Ideal for C-suite, VP, Director-level applications.
+    """
+    name          = data.get("name", "Your Name")
+    job_title     = data.get("job_title", "")
+    email         = data.get("email", "")
+    phone         = data.get("phone", "")
+    location      = data.get("location", "")
+    linkedin      = data.get("linkedin", "")
+    company       = data.get("company", "Company Name")
+    hiring_manager= data.get("hiring_manager", "Board / Search Committee")
+    role          = data.get("role", "the position")
+    date_str      = data.get("date", "")
+    paragraphs    = data.get("body_paragraphs", [
+        "With over [X] years leading [Function/Division] in [Industry], I bring a track record of driving strategic growth and operational excellence. I am writing to express my interest in the [Role] position at [Company].",
+        "At [Previous Organization], I spearheaded [Initiative], resulting in [Revenue/Efficiency/Growth Outcome]. This experience has sharpened my ability to align cross-functional teams around ambitious goals while maintaining fiscal discipline.",
+        "I am drawn to [Company] because of its [Specific Initiative, Vision, or Market Position]. I am confident that my leadership philosophy — centred on [Value 1], [Value 2], and [Value 3] — aligns with your organizational culture.",
+    ])
+
+    contact_items = []
+    if email:    contact_items.append(f"<a href='mailto:{email}' style='color:#d4af37;text-decoration:none;'>{email}</a>")
+    if phone:    contact_items.append(f"<span>{phone}</span>")
+    if location: contact_items.append(f"<span>{location}</span>")
+    if linkedin:
+        href = linkedin if linkedin.startswith('http') else f"https://{linkedin}"
+        contact_items.append(f"<a href='{href}' target='_blank' style='color:#d4af37;text-decoration:none;'>{linkedin}</a>")
+    contact_line = " &nbsp;|&nbsp; ".join(contact_items)
+
+    paras_html = "".join(
+        f"<p style='margin-bottom:16px;font-size:14px;color:#1a1a1a;line-height:1.85;text-align:justify;'>{p}</p>"
+        for p in paragraphs
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang='en'>
+<head><meta charset='UTF-8'><title>Cover Letter — {name}</title>
+<style>
+  * {{ box-sizing:border-box; margin:0; padding:0; }}
+  body {{ font-family:'Georgia',serif; background:#fff; color:#1a1a1a; padding:0; line-height:1.6; }}
+</style>
+</head>
+<body>
+  <!-- EXECUTIVE DARK HEADER -->
+  <div style='background:linear-gradient(135deg,#0d1b2a,#1a2f4c);padding:40px 64px 32px;'>
+    <h1 style='font-size:30px;font-weight:700;color:#ffffff;letter-spacing:2px;margin-bottom:4px;font-family:"Georgia",serif;'>{name}</h1>
+    {f"<div style='font-size:14px;color:#d4af37;font-weight:600;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:12px;'>{job_title}</div>" if job_title else ''}
+    <div style='font-size:12px;color:#adb5bd;'>{contact_line}</div>
+  </div>
+  <div style='height:4px;background:linear-gradient(90deg,#d4af37,#b8860b);'></div>
+
+  <!-- BODY -->
+  <div style='padding:42px 64px;'>
+    {f"<p style='font-size:13px;color:#6b7280;margin-bottom:22px;'>{date_str}</p>" if date_str else ''}
+
+    <div style='margin-bottom:24px;'>
+      <p style='font-size:14px;font-weight:700;color:#0d1b2a;'>{hiring_manager}</p>
+      <p style='font-size:14px;color:#374151;'>{company}</p>
+    </div>
+
+    <p style='font-size:14px;margin-bottom:20px;'>Dear {hiring_manager},</p>
+
+    {paras_html}
+
+    <p style='font-size:14px;color:#374151;margin-bottom:34px;'>I welcome the opportunity to explore this further at your convenience. Please find my resume enclosed for your review.</p>
+
+    <p style='font-size:14px;'>Respectfully yours,</p>
+    <p style='font-size:18px;font-weight:700;color:#0d1b2a;margin-top:12px;font-family:"Georgia",serif;'>{name}</p>
+    {f"<p style='font-size:13px;color:#d4af37;font-weight:600;margin-top:4px;'>{job_title}</p>" if job_title else ''}
+  </div>
+</body></html>"""
+
+
+def render_cover_letter_entry_level(data):
+    """
+    Cover Letter Template 5 — Entry-Level / Fresher
+    Bright, approachable layout with blue accents. Ideal for recent graduates, interns.
+    """
+    name          = data.get("name", "Your Name")
+    job_title     = data.get("job_title", "")
+    email         = data.get("email", "")
+    phone         = data.get("phone", "")
+    location      = data.get("location", "")
+    linkedin      = data.get("linkedin", "")
+    company       = data.get("company", "Company Name")
+    hiring_manager= data.get("hiring_manager", "Hiring Manager")
+    role          = data.get("role", "the position")
+    date_str      = data.get("date", "")
+    paragraphs    = data.get("body_paragraphs", [
+        "I am a recent graduate in [Field] from [University] and am excited to apply for the [Role] opportunity at [Company]. My academic training and hands-on project experience have prepared me to contribute meaningfully from day one.",
+        "During my studies, I developed strong skills in [Skill 1], [Skill 2], and [Skill 3]. My final-year project on [Project Topic] gave me practical exposure to [Relevant Technology/Process], and I achieved [Result/Grade/Recognition].",
+        "I am eager to grow within a company like [Company] that values [Culture Value]. I am a quick learner, highly motivated, and committed to delivering quality work. I look forward to contributing to your team.",
+    ])
+
+    contact_items = []
+    if email:    contact_items.append(f"<a href='mailto:{email}' style='color:#1d4ed8;text-decoration:none;'>{email}</a>")
+    if phone:    contact_items.append(phone)
+    if location: contact_items.append(location)
+    if linkedin:
+        href = linkedin if linkedin.startswith('http') else f"https://{linkedin}"
+        contact_items.append(f"<a href='{href}' target='_blank' style='color:#1d4ed8;text-decoration:none;'>{linkedin}</a>")
+    contact_line = " &nbsp;|&nbsp; ".join(contact_items)
+
+    paras_html = "".join(
+        f"<p style='margin-bottom:16px;font-size:14px;color:#374151;line-height:1.8;'>{p}</p>"
+        for p in paragraphs
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang='en'>
+<head><meta charset='UTF-8'><title>Cover Letter — {name}</title>
+<style>
+  * {{ box-sizing:border-box; margin:0; padding:0; }}
+  body {{ font-family:'Segoe UI',Arial,sans-serif; background:#fff; color:#1f2937; padding:48px 64px; line-height:1.6; }}
+</style>
+</head>
+<body>
+  <!-- HEADER -->
+  <div style='background:#eff6ff;border-left:5px solid #1d4ed8;padding:22px 28px;margin-bottom:30px;border-radius:0 8px 8px 0;'>
+    <h1 style='font-size:26px;font-weight:800;color:#1e3a8a;margin-bottom:2px;'>{name}</h1>
+    {f"<div style='font-size:14px;color:#3b82f6;font-weight:600;margin-bottom:8px;'>{job_title}</div>" if job_title else ''}
+    <div style='font-size:12px;color:#6b7280;'>{contact_line}</div>
+  </div>
+
+  <!-- DATE + RECIPIENT -->
+  {f"<p style='font-size:13px;color:#9ca3af;margin-bottom:18px;'>{date_str}</p>" if date_str else ''}
+  <div style='margin-bottom:22px;'>
+    <p style='font-size:14px;font-weight:600;color:#1f2937;'>{hiring_manager}</p>
+    <p style='font-size:14px;color:#6b7280;'>{company}</p>
+  </div>
+
+  <!-- GREETING -->
+  <p style='font-size:14px;margin-bottom:18px;'>Dear {hiring_manager},</p>
+
+  <!-- BODY -->
+  {paras_html}
+
+  <!-- CLOSING -->
+  <p style='font-size:14px;color:#374151;margin-bottom:28px;'>I would be grateful for the opportunity to interview and learn more about this role. Thank you for your time and consideration.</p>
+  <p style='font-size:14px;'>Sincerely,</p>
+  <p style='font-size:16px;font-weight:700;color:#1e3a8a;margin-top:10px;'>{name}</p>
+  {f"<p style='font-size:13px;color:#6b7280;'>{job_title}</p>" if job_title else ''}
+</body></html>"""
+
+
+def render_cover_letter_ats(data):
+    """
+    Cover Letter Template 6 — Technical / ATS-Optimized
+    Plain, fully text-based, high keyword density. Zero graphics — maximum ATS parse rate.
+    Ideal for software engineers, data scientists, technical roles with ATS screening.
+    """
+    name          = data.get("name", "Your Name")
+    job_title     = data.get("job_title", "")
+    email         = data.get("email", "")
+    phone         = data.get("phone", "")
+    location      = data.get("location", "")
+    linkedin      = data.get("linkedin", "")
+    portfolio     = data.get("portfolio", "")
+    company       = data.get("company", "Company Name")
+    hiring_manager= data.get("hiring_manager", "Hiring Manager")
+    role          = data.get("role", "the position")
+    date_str      = data.get("date", "")
+    key_skills    = data.get("key_skills", "Python, Machine Learning, SQL, Cloud Infrastructure, Agile")
+    paragraphs    = data.get("body_paragraphs", [
+        "I am applying for the [Role] position at [Company]. My technical background includes [Key Skills] with [X] years of hands-on industry experience across [Domain 1] and [Domain 2].",
+        "In my current role at [Company], I [Specific Technical Achievement] using [Technologies], which resulted in [Measurable Outcome — e.g., 40% reduction in processing time]. I also led [Another Contribution] that improved [System/Process] reliability by [Metric].",
+        "I am particularly interested in [Company]'s work on [Product/Project/Technology Stack]. My experience with [Relevant Tool/Framework] and my understanding of [Technical Domain] position me to add immediate value to your engineering team.",
+    ])
+
+    if job_title: contact_parts_line = f"{name} | {job_title}"
+    else:         contact_parts_line = name
+
+    details = []
+    if email:    details.append(email)
+    if phone:    details.append(phone)
+    if location: details.append(location)
+    if linkedin: details.append(linkedin)
+    if portfolio:details.append(portfolio)
+    details_line = " | ".join(details)
+
+    paras_html = "".join(
+        f"<p style='margin-bottom:14px;font-size:14px;color:#111827;line-height:1.8;'>{p}</p>"
+        for p in paragraphs
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang='en'>
+<head><meta charset='UTF-8'><title>Cover Letter — {name}</title>
+<style>
+  * {{ box-sizing:border-box; margin:0; padding:0; }}
+  body {{ font-family:Arial,Helvetica,sans-serif; background:#fff; color:#111827; padding:48px 64px; line-height:1.6; font-size:14px; }}
+  hr {{ border:none; border-top:1px solid #d1d5db; margin:18px 0; }}
+</style>
+</head>
+<body>
+  <!-- ATS HEADER — plain text, no images -->
+  <div style='margin-bottom:6px;'>
+    <p style='font-size:22px;font-weight:700;color:#111827;'>{contact_parts_line}</p>
+    <p style='font-size:13px;color:#374151;margin-top:4px;'>{details_line}</p>
+  </div>
+  <hr>
+
+  <!-- DATE -->
+  {f"<p style='margin-bottom:16px;color:#374151;'>{date_str}</p>" if date_str else ''}
+
+  <!-- RECIPIENT -->
+  <div style='margin-bottom:20px;'>
+    <p style='font-weight:600;color:#111827;'>{hiring_manager}</p>
+    <p style='color:#374151;'>{company}</p>
+  </div>
+
+  <!-- SUBJECT LINE (ATS-friendly) -->
+  <p style='font-weight:700;margin-bottom:18px;'>Re: Application for {role} — {name}</p>
+
+  <!-- GREETING -->
+  <p style='margin-bottom:18px;'>Dear {hiring_manager},</p>
+
+  <!-- BODY -->
+  {paras_html}
+
+  <!-- KEY SKILLS MENTION (ATS keyword boost) -->
+  <p style='margin-bottom:14px;font-size:14px;color:#111827;line-height:1.8;'>
+    <strong>Core Technical Skills:</strong> {key_skills}
+  </p>
+
+  <!-- CLOSING -->
+  <p style='margin-bottom:28px;color:#374151;'>I have attached my resume for your review. I am available for an interview at your earliest convenience and can be reached at {email or phone or "the contact details above"}.</p>
+  <p>Sincerely,</p>
+  <p style='font-weight:700;font-size:15px;margin-top:10px;'>{name}</p>
+  {f"<p style='color:#374151;margin-top:2px;'>{job_title}</p>" if job_title else ''}
+</body></html>"""
+
+
+# ── Cover Letter template registry ────────────────────────────────────────────
+COVER_LETTER_TEMPLATES = {
+    "Professional / Corporate":     render_cover_letter_professional,
+    "Modern Minimal":               render_cover_letter_modern,
+    "Creative":                     render_cover_letter_creative,
+    "Executive":                    render_cover_letter_executive,
+    "Entry-Level / Fresher":        render_cover_letter_entry_level,
+    "Technical / ATS-Optimized":    render_cover_letter_ats,
+}
+
+def render_cover_letter(template_name, data):
+    """
+    Render a cover letter from a named template.
+
+    Args:
+        template_name (str): One of the keys in COVER_LETTER_TEMPLATES.
+        data (dict): Cover letter data. Common keys:
+            name, job_title, email, phone, location, linkedin, portfolio,
+            company, hiring_manager, role, date, body_paragraphs (list[str]),
+            key_skills (str, ATS template only), accent_color (str, Creative only).
+
+    Returns:
+        str: Full HTML string for the cover letter.
+    """
+    fn = COVER_LETTER_TEMPLATES.get(template_name)
+    if fn is None:
+        fn = render_cover_letter_professional
+    return fn(data)
+
+
 def generate_cover_letter_from_resume_builder():
     import streamlit as st
     from datetime import datetime
@@ -9917,6 +10483,21 @@ def generate_cover_letter_from_resume_builder():
     skills = st.session_state.get("skills", "")
     location = st.session_state.get("location", "")
     today_date = datetime.today().strftime("%B %d, %Y")
+
+    # ✅ FIX 1 — Template selector dropdown
+    cover_letter_template = st.selectbox(
+        "🎨 Choose Cover Letter Template",
+        options=list(COVER_LETTER_TEMPLATES.keys()),
+        index=0,
+        key="cover_letter_template_select",
+        help="Select the style/format for your cover letter"
+    )
+
+    # ✅ FIX 3 — Accent color picker (only relevant for Creative template)
+    if cover_letter_template == "Creative":
+        accent_color = st.color_picker("🎨 Choose Accent Color", value="#7c3aed", key="cl_accent_color")
+    else:
+        accent_color = "#003366"
 
     # ✅ Input boxes for contact info
     company = st.text_input("🏢 Target Company", placeholder="e.g., Google")
@@ -9934,64 +10515,114 @@ def generate_cover_letter_from_resume_builder():
         prompt = f"""
 You are a professional cover letter writer.
 
-Write a formal and compelling cover letter using the information below. 
-Format it as a real letter with:
-1. Date
-2. Recipient heading
-3. Proper salutation
-4. Three short paragraphs
-5. Professional closing
+Write ONLY the body paragraphs of a cover letter for the candidate below.
+Do NOT include: date, recipient address, salutation ("Dear ..."), closing ("Sincerely"), or the candidate's name at the end.
+The template will add all of those automatically — your job is only the 3 body paragraphs.
 
-Ensure you **only include the company name once** in the header or salutation, 
-and avoid repeating it redundantly in the body.
-
-### Heading Info:
-{today_date}
-Hiring Manager, {company}, {location}
+Output exactly 3 paragraphs separated by a blank line (double newline).
+Each paragraph should be 2-4 sentences.
 
 ### Candidate Info:
 - Name: {name}
 - Job Title: {job_title}
+- Target Company: {company}
+- Location: {location}
 - Summary: {summary}
 - Skills: {skills}
-- Location: {location}
 
 ### Instructions:
-- Do not use HTML tags. 
-- Return plain text only.
+- Do NOT include the date, header, salutation, or sign-off.
+- Do NOT start with "Dear Hiring Manager" or any greeting.
+- Do NOT end with "Sincerely" or the candidate's name.
+- Do not use HTML tags.
+- Separate each paragraph with a blank line (double newline).
+- Return plain text body paragraphs ONLY.
 """
 
         # ✅ Call LLM
-        cover_letter = call_llm(prompt, session=st.session_state).strip()
+        cover_letter_raw = call_llm(prompt, session=st.session_state).strip()
 
-        # ✅ Store plain text
-        st.session_state["cover_letter"] = cover_letter
+        # ✅ Strip any header/salutation/closing lines the LLM may have added despite instructions
+        import re as _cl_re
 
-        # ✅ Build HTML wrapper for preview (safe)
-        cover_letter_html = f"""
-        <div style="font-family: Georgia, serif; font-size: 13pt; line-height: 1.6; 
-                    color: #000; background: #fff; padding: 25px; 
-                    border-radius: 8px; box-shadow: 0px 2px 6px rgba(0,0,0,0.1); 
-                    max-width: 800px; margin: auto;">
-            <div style="text-align:center; margin-bottom:15px;">
-                <div style="font-size:18pt; font-weight:bold; color:#003366;">{name}</div>
-                <div style="font-size:14pt; color:#555;">{job_title}</div>
-                <div style="font-size:10pt; margin-top:5px;">
-                    <a href="{linkedin}" style="color:#003366;">{linkedin}</a><br/>
-                    📧 {email} | 📞 {mobile}
-                </div>
-            </div>
-            <hr/>
-            <pre style="white-space: pre-wrap; font-family: Georgia, serif; font-size: 12pt; color:#000;">
-{cover_letter}
-            </pre>
-        </div>
-        """
+        def _strip_letter_boilerplate(text):
+            """Remove date lines, salutation, closing and name sign-off from LLM output."""
+            lines = text.split('\n')
+            cleaned = []
+            # Patterns to strip
+            skip_patterns = [
+                r'^\s*(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d',  # date lines
+                r'^\s*\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}',       # numeric date
+                r'^\s*dear\b',                                      # salutation
+                r'^\s*(sincerely|regards|best regards|yours truly|warm regards|respectfully)',  # closing
+                r'^\s*hiring manager[,.]?\s*$',                    # bare "Hiring Manager"
+                r'^\s*[a-z ]+,\s*(kolkata|mumbai|delhi|bangalore|hyderabad|chennai|pune)',  # "Company, City"
+            ]
+            skip_re = [_cl_re.compile(p, _cl_re.IGNORECASE) for p in skip_patterns]
+            # Also skip the last 1-2 lines if they look like a name sign-off (short line after closing)
+            # Find closing line index
+            closing_idx = None
+            for i, line in enumerate(lines):
+                if any(r.match(line) for r in skip_re[4:5]):  # closing words
+                    closing_idx = i
+            for i, line in enumerate(lines):
+                if any(r.match(line) for r in skip_re):
+                    continue
+                # Skip lines that are just the candidate name (after a closing)
+                if closing_idx is not None and i > closing_idx and line.strip().lower() in (name.lower(), job_title.lower(), ''):
+                    continue
+                cleaned.append(line)
+            return '\n'.join(cleaned).strip()
+
+        cover_letter_body = _strip_letter_boilerplate(cover_letter_raw)
+
+        # ✅ Store plain text (full body only, no boilerplate)
+        st.session_state["cover_letter"] = cover_letter_body
+
+        # ✅ Robust paragraph splitting (handles \n\n and single \n)
+        normalised  = _cl_re.sub(r'\n{3,}', '\n\n', cover_letter_body)
+        raw_paras   = normalised.split('\n\n')
+        if len(raw_paras) <= 1:          # fallback: LLM used single newlines only
+            raw_paras = normalised.split('\n')
+        body_paragraphs = [p.strip() for p in raw_paras if p.strip()]
+
+        # ✅ Build structured data dict for all template renderers
+        cl_data = {
+            "name":            name,
+            "job_title":       job_title,
+            "email":           email,
+            "phone":           mobile,
+            "location":        location,
+            "linkedin":        linkedin,
+            "portfolio":       "",
+            "company":         company,
+            "hiring_manager":  "Hiring Manager",
+            "role":            job_title,
+            "date":            today_date,
+            "body_paragraphs": body_paragraphs,
+            "key_skills":      skills,       # used by ATS template
+            "accent_color":    accent_color, # FIX 3 — user-picked color for Creative
+        }
+
+        # ✅ FIX 1 — Render using the chosen template
+        cover_letter_html = render_cover_letter(cover_letter_template, cl_data)
 
         st.session_state["cover_letter_html"] = cover_letter_html
 
-        # ✅ Show nicely in Streamlit
-        st.markdown(cover_letter_html, unsafe_allow_html=True)
+        # ✅ Show cover letter in an iframe so the full HTML template renders correctly
+        # (st.markdown cannot render full <!DOCTYPE html> documents — it leaks raw tags)
+        import streamlit.components.v1 as _cl_components
+        st.success("✅ Cover letter generated successfully!")
+        st.markdown(
+            "<p style='color:#555; font-size:13px; margin-top:8px;'>"
+            "📄 Cover Letter Preview (scroll to explore):</p>",
+            unsafe_allow_html=True,
+        )
+        _cl_components.html(
+            cover_letter_html,
+            height=700,
+            scrolling=True,
+        )
 
 # Import necessary modules first
 import streamlit as st
