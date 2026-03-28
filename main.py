@@ -19999,8 +19999,10 @@ Generate {num_questions} questions now:
                                 st.session_state["_timer_expired"] = True
                                 st.rerun(scope="app")
 
-                    # Question display with phase indicator — rendered BEFORE the timer fragment
-                    # so Ctrl+Enter / fragment reruns never cause it to vanish
+                    # Timer above question card
+                    _timer_fragment()
+
+                    # Question card
                     phase_badge = "📄 Resume-Based Question" if current_index <= num_resume_qs else "💼 Generic Interview Question"
                     st.markdown(f"""
                     <div class="quiz-card">
@@ -20013,12 +20015,9 @@ Generate {num_questions} questions now:
                     </div>
                     """, unsafe_allow_html=True)
 
-                    _timer_fragment()
-
-                    # Add refresh button for regenerating all interview questions
-                    col1, col2 = st.columns([3, 1])
+                    col1, col2 = st.columns([6, 1])
                     with col2:
-                        if st.button("🔄 Refresh Interview"):
+                        if st.button("🔄 Refresh", key="refresh_btn", help="Restart interview"):
                             # Clear all interview state
                             st.session_state.dynamic_interview_questions = []
                             st.session_state.current_dynamic_interview_question = 0
