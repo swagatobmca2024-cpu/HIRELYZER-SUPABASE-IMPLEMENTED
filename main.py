@@ -19939,8 +19939,20 @@ Generate {num_questions} questions now:
 
                     @st.fragment(run_every=1)
                     def _timer_fragment():
-                        # Stop ticking once answer is submitted — freeze the display
-                        if st.session_state.get("dynamic_answer_submitted", False):
+                        # Timer + question card live together inside the fragment.
+                        # This guarantees the question never disappears — both elements
+                        # are owned by the same fragment slot and rerender atomically.
+
+                        _elapsed   = time.time() - st.session_state.question_timer_start
+                        _remaining = max(0, st.session_state.timer_seconds - _elapsed)
+                        _mins      = int(_remaining // 60)
+                        _secs      = int(_remaining % 60)
+                        _pct       = 1.0 - (_remaining / st.session_state.timer_seconds)
+                        _urgent    = _remaining <= 30
+                        _submitted = st.session_state.get("dynamic_answer_submitted", False)
+
+                        # ── Timer bar ──────────────────────────────────────────────
+                        if _submitted:
                             st.markdown("""
                             <div style="background:linear-gradient(135deg,rgba(52,211,153,0.10),rgba(52,211,153,0.05));
                                         border:1px solid rgba(52,211,153,0.30);border-radius:12px;
@@ -19950,70 +19962,68 @@ Generate {num_questions} questions now:
                               </div>
                             </div>
                             """, unsafe_allow_html=True)
-                            return  # exits fragment — no more reruns until next question loads
-
-                        _elapsed   = time.time() - st.session_state.question_timer_start
-                        _remaining = max(0, st.session_state.timer_seconds - _elapsed)
-                        _mins      = int(_remaining // 60)
-                        _secs      = int(_remaining % 60)
-                        _pct       = 1.0 - (_remaining / st.session_state.timer_seconds)
-                        _urgent    = _remaining <= 30
-
-                        _timer_color    = "#f87171" if _urgent else "#fbbf24"
-                        _border_color   = "rgba(244,67,54,0.45)" if _urgent else "rgba(251,191,36,0.25)"
-                        _bg             = ("linear-gradient(135deg,rgba(244,67,54,0.12),rgba(244,67,54,0.06))"
-                                           if _urgent else
-                                           "linear-gradient(135deg,rgba(251,191,36,0.08),rgba(251,191,36,0.04))")
-                        _bar_color      = "#ef4444" if _urgent else "#f59e0b"
-                        _pulse_style    = "animation:t4pulse 1s ease-in-out infinite;" if _urgent else ""
-
-                        st.markdown(f"""
-                        <style>
-                          @keyframes t4pulse {{
-                            0%,100% {{ box-shadow: 0 0 0 0 rgba(244,67,54,0.0); }}
-                            50%      {{ box-shadow: 0 0 0 6px rgba(244,67,54,0.18); }}
-                          }}
-                        </style>
-                        <div style="background:{_bg};border:1px solid {_border_color};
-                                    border-radius:12px;padding:14px;text-align:center;
-                                    font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;
-                                    {_pulse_style}">
-                          <div style="font-size:1.4rem;font-weight:700;color:{_timer_color};
-                                      letter-spacing:-0.01em;">
-                            ⏰ Time Remaining: {_mins:02d}:{_secs:02d}
-                          </div>
-                          <div style="width:100%;height:4px;background:rgba(255,255,255,0.08);
-                                      border-radius:99px;margin-top:10px;overflow:hidden;">
-                            <div style="width:{int(_pct*100)}%;height:100%;border-radius:99px;
-                                        background:{_bar_color};transition:width 0.9s linear;">
+                        else:
+                            _timer_color  = "#f87171" if _urgent else "#fbbf24"
+                            _border_color = "rgba(244,67,54,0.45)" if _urgent else "rgba(251,191,36,0.25)"
+                            _bg           = ("linear-gradient(135deg,rgba(244,67,54,0.12),rgba(244,67,54,0.06))"
+                                             if _urgent else
+                                             "linear-gradient(135deg,rgba(251,191,36,0.08),rgba(251,191,36,0.04))")
+                            _bar_color    = "#ef4444" if _urgent else "#f59e0b"
+                            _pulse_style  = "animation:t4pulse 1s ease-in-out infinite;" if _urgent else ""
+                            st.markdown(f"""
+                            <style>
+                              @keyframes t4pulse {{
+                                0%,100% {{ box-shadow: 0 0 0 0 rgba(244,67,54,0.0); }}
+                                50%      {{ box-shadow: 0 0 0 6px rgba(244,67,54,0.18); }}
+                              }}
+                            </style>
+                            <div style="background:{_bg};border:1px solid {_border_color};
+                                        border-radius:12px;padding:14px;text-align:center;
+                                        font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;
+                                        {_pulse_style}">
+                              <div style="font-size:1.4rem;font-weight:700;color:{_timer_color};
+                                          letter-spacing:-0.01em;">
+                                ⏰ Time Remaining: {_mins:02d}:{_secs:02d}
+                              </div>
+                              <div style="width:100%;height:4px;background:rgba(255,255,255,0.08);
+                                          border-radius:99px;margin-top:10px;overflow:hidden;">
+                                <div style="width:{int(_pct*100)}%;height:100%;border-radius:99px;
+                                            background:{_bar_color};transition:width 0.9s linear;">
+                                </div>
+                              </div>
                             </div>
-                          </div>
+                            """, unsafe_allow_html=True)
+
+                        # ── Question card (inside fragment so it never orphans) ────
+                        _q_text   = st.session_state.get("current_interview_question_text") or ""
+                        _q_idx    = st.session_state.get("current_dynamic_interview_question", 0)
+                        _qs       = st.session_state.get("dynamic_interview_questions", [])
+                        if not _q_text and _qs:
+                            _q_text = _qs[_q_idx] if _q_idx < len(_qs) else ""
+                        _answered = len(st.session_state.get("dynamic_interview_answers", []))
+                        _total_q  = st.session_state.get("original_num_questions", 1)
+                        _num_res  = len(st.session_state.get("resume_based_questions", []))
+                        _phase_badge = "📄 Resume-Based Question" if (_q_idx + 1) <= _num_res else "💼 Generic Interview Question"
+                        _role     = st.session_state.get("interview_role", "")
+                        _diff     = st.session_state.get("interview_difficulty", "")
+                        st.markdown(f"""
+                        <div class="quiz-card">
+                            <h3 style="color:#38bdf8;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;font-weight:600;letter-spacing:-0.02em;">Question {_answered + 1} of {_total_q}</h3>
+                            <div style="background:rgba(56,189,248,0.10);padding:6px 12px;border-radius:99px;margin:10px 0;display:inline-block;border:1px solid rgba(56,189,248,0.22);">
+                                <span style="color:#38bdf8;font-weight:600;font-size:0.8rem;letter-spacing:0.03em;text-transform:uppercase;">{_phase_badge}</span>
+                            </div>
+                            <h4 style="color:#94a3b8;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;font-weight:500;font-size:0.875rem;margin:12px 0;letter-spacing:0.02em;">Role: {_role} | Difficulty: {_diff}</h4>
+                            <p style="font-size:1rem;color:#f0f4f8;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;line-height:1.6;margin:14px 0;">{_q_text}</p>
                         </div>
                         """, unsafe_allow_html=True)
 
-                        # When time runs out, set a flag and do a FULL APP rerun for auto-submit.
-                        # CRITICAL: must use st.rerun(scope="app") — plain st.rerun() inside a
-                        # fragment only reruns the fragment, never the outer page.
-                        if _remaining <= 0 and not st.session_state.get("dynamic_answer_submitted", False):
+                        # ── Auto-submit trigger ────────────────────────────────────
+                        if _remaining <= 0 and not _submitted:
                             if not st.session_state.get("_timer_expired", False):
                                 st.session_state["_timer_expired"] = True
                                 st.rerun(scope="app")
 
-                    # Timer above question card
                     _timer_fragment()
-
-                    # Question card
-                    phase_badge = "📄 Resume-Based Question" if current_index <= num_resume_qs else "💼 Generic Interview Question"
-                    st.markdown(f"""
-                    <div class="quiz-card">
-                        <h3 style="color:#38bdf8;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;font-weight:600;letter-spacing:-0.02em;">Question {questions_answered + 1} of {st.session_state.original_num_questions}</h3>
-                        <div style="background:rgba(56,189,248,0.10);padding:6px 12px;border-radius:99px;margin:10px 0;display:inline-block;border:1px solid rgba(56,189,248,0.22);">
-                            <span style="color:#38bdf8;font-weight:600;font-size:0.8rem;letter-spacing:0.03em;text-transform:uppercase;">{phase_badge}</span>
-                        </div>
-                        <h4 style="color:#94a3b8;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;font-weight:500;font-size:0.875rem;margin:12px 0;letter-spacing:0.02em;">Role: {selected_role} | Difficulty: {st.session_state.interview_difficulty}</h4>
-                        <p style="font-size:1rem;color:#f0f4f8;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;line-height:1.6;margin:14px 0;">{question}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
 
                     col1, col2 = st.columns([6, 1])
                     with col2:
