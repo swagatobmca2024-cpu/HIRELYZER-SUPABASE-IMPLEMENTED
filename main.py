@@ -19872,7 +19872,7 @@ Generate {num_questions} questions now:
                             st.session_state.interview_actual_start_time = time.time()
                             st.session_state.dynamic_answer_submitted = False
                             st.session_state.current_interview_question_text = all_questions[0]
-                            st.session_state.question_timer_start = time.time()
+                            st.session_state.question_timer_start = None  # fragment will stamp on first tick
                             st.session_state.timer_seconds = timer_seconds
                             st.session_state.interview_difficulty = interview_difficulty
                             st.session_state.interview_mode = interview_type
@@ -19881,6 +19881,9 @@ Generate {num_questions} questions now:
                             st.session_state.escalation_layer = 1
                             st.session_state.follow_up_count = 0
                             st.session_state.follow_up_strategy = "Depth Probe"
+                            # Clear any stale per-question timer stamps
+                            for _k in [k for k in st.session_state.keys() if k.startswith("_timer_started_q")]:
+                                del st.session_state[_k]
 
                             # Show resume scanning animation if resume questions exist
                             if resume_based_qs:
@@ -19923,26 +19926,26 @@ Generate {num_questions} questions now:
                 if questions_answered < st.session_state.original_num_questions:
                     question = st.session_state.current_interview_question_text or st.session_state.dynamic_interview_questions[st.session_state.current_dynamic_interview_question]
 
-                    # TIMER RESET: Reset timer every time a new question loads
+                    # remaining_time used only for the outer auto-submit fallback check.
+                    # When question_timer_start is None the fragment hasn't stamped yet —
+                    # treat as full time so auto-submit doesn't fire prematurely.
                     if st.session_state.question_timer_start is None:
-                        st.session_state.question_timer_start = time.time()
-
-                    # Calculate remaining time
-                    elapsed_time = time.time() - st.session_state.question_timer_start
-                    remaining_time = max(0, st.session_state.timer_seconds - elapsed_time)
-
-                    # ── SMOOTH TIMER via st.fragment ────────────────────────────
-                    # st.fragment(run_every=1) reruns ONLY this block every second.
-                    # Everything outside (question card, text area, buttons) is untouched
-                    # — zero blinking on the rest of the page.
-                    # When time expires, the fragment sets a session_state flag and calls
-                    # st.rerun() to trigger a full-page rerun for auto-submit processing.
+                        remaining_time = st.session_state.timer_seconds
+                    else:
+                        elapsed_time = time.time() - st.session_state.question_timer_start
+                        remaining_time = max(0, st.session_state.timer_seconds - elapsed_time)
 
                     @st.fragment(run_every=1)
                     def _timer_fragment():
-                        # Timer + question card live together inside the fragment.
-                        # This guarantees the question never disappears — both elements
-                        # are owned by the same fragment slot and rerender atomically.
+                        # ── Reset timer on first tick of each new question ─────────
+                        # question_timer_start is set to None on Continue/Start so the
+                        # fragment itself stamps the exact moment it first renders —
+                        # eliminating the LLM/rerun lag that caused the 6-second drift.
+                        _q_idx = st.session_state.get("current_dynamic_interview_question", 0)
+                        _timer_key = f"_timer_started_q{_q_idx}"
+                        if not st.session_state.get(_timer_key, False):
+                            st.session_state.question_timer_start = time.time()
+                            st.session_state[_timer_key] = True
 
                         _elapsed   = time.time() - st.session_state.question_timer_start
                         _remaining = max(0, st.session_state.timer_seconds - _elapsed)
@@ -20065,6 +20068,9 @@ Generate {num_questions} questions now:
                         st.session_state.current_interview_id = None
                         st.session_state.question_db_ids = []
                         st.session_state.pop("_timer_expired", None)
+                        # Clear all per-question timer stamps
+                        for _k in [k for k in st.session_state.keys() if k.startswith("_timer_started_q")]:
+                            del st.session_state[_k]
                         st.rerun()
 
                     # Answer input with character limit
@@ -20269,14 +20275,15 @@ Generate {num_questions} questions now:
                                 st.session_state.dynamic_answer_submitted = False
                                 st.session_state.pending_followup_display = ""
                                 st.session_state.pending_followup_strategy = ""
-                                st.session_state.pop("_timer_expired", None)  # clear so next Q starts clean
+                                st.session_state.pop("_timer_expired", None)
+                                # Clear ALL per-question timer stamps so fragment re-stamps fresh
+                                for _k in [k for k in st.session_state.keys() if k.startswith("_timer_started_q")]:
+                                    del st.session_state[_k]
+                                st.session_state.question_timer_start = None  # fragment stamps on first tick
                                 if st.session_state.current_dynamic_interview_question < len(st.session_state.dynamic_interview_questions):
                                     st.session_state.current_interview_question_text = st.session_state.dynamic_interview_questions[st.session_state.current_dynamic_interview_question]
                                 else:
-                                    # Safety check - if we're out of questions but haven't answered all, generate one
                                     st.session_state.current_interview_question_text = f"Additional question for {selected_role}"
-                                # TIMER RESET: Reset timer for next question
-                                st.session_state.question_timer_start = time.time()
                                 st.rerun()
 
                     # Progress bar for interview completion
@@ -20565,6 +20572,9 @@ Generate {num_questions} questions now:
                     st.session_state.follow_up_count = 0
                     st.session_state.current_interview_id = None
                     st.session_state.question_db_ids = []
+                    st.session_state.pop("_timer_expired", None)
+                    for _k in [k for k in st.session_state.keys() if k.startswith("_timer_started_q")]:
+                        del st.session_state[_k]
                     st.rerun()
         else:
             st.info("Please select both a career domain and target role to start the interview practice.")
