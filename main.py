@@ -19939,6 +19939,19 @@ Generate {num_questions} questions now:
 
                     @st.fragment(run_every=1)
                     def _timer_fragment():
+                        # Stop ticking once answer is submitted — freeze the display
+                        if st.session_state.get("dynamic_answer_submitted", False):
+                            st.markdown("""
+                            <div style="background:linear-gradient(135deg,rgba(52,211,153,0.10),rgba(52,211,153,0.05));
+                                        border:1px solid rgba(52,211,153,0.30);border-radius:12px;
+                                        padding:14px;text-align:center;">
+                              <div style="font-size:1.2rem;font-weight:700;color:#34d399;">
+                                ✅ Answer Submitted
+                              </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            return  # exits fragment — no more reruns until next question loads
+
                         _elapsed   = time.time() - st.session_state.question_timer_start
                         _remaining = max(0, st.session_state.timer_seconds - _elapsed)
                         _mins      = int(_remaining // 60)
@@ -20025,6 +20038,7 @@ Generate {num_questions} questions now:
                             st.session_state.follow_up_count = 0
                             st.session_state.current_interview_id = None
                             st.session_state.question_db_ids = []
+                            st.session_state.pop("_timer_expired", None)  # clear stale flag
                             # Force regeneration
                             st.rerun()
 
@@ -20230,6 +20244,7 @@ Generate {num_questions} questions now:
                                 st.session_state.dynamic_answer_submitted = False
                                 st.session_state.pending_followup_display = ""
                                 st.session_state.pending_followup_strategy = ""
+                                st.session_state.pop("_timer_expired", None)  # clear so next Q starts clean
                                 if st.session_state.current_dynamic_interview_question < len(st.session_state.dynamic_interview_questions):
                                     st.session_state.current_interview_question_text = st.session_state.dynamic_interview_questions[st.session_state.current_dynamic_interview_question]
                                 else:
