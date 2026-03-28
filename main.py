@@ -19624,8 +19624,6 @@ Generate {num_questions} questions now:
                 st.session_state.question_timer_start = None
             if 'timer_seconds' not in st.session_state:
                 st.session_state.timer_seconds = 120
-            if 'timer_expired' not in st.session_state:
-                st.session_state.timer_expired = False
             if 'interview_difficulty' not in st.session_state:
                 st.session_state.interview_difficulty = "Medium"
             if 'interview_mode' not in st.session_state:
@@ -19928,52 +19926,67 @@ Generate {num_questions} questions now:
                     if st.session_state.question_timer_start is None:
                         st.session_state.question_timer_start = time.time()
 
-                    # Calculate remaining time (used outside fragment for auto-submit logic)
+                    # Calculate remaining time
                     elapsed_time = time.time() - st.session_state.question_timer_start
                     remaining_time = max(0, st.session_state.timer_seconds - elapsed_time)
 
-                    # ── FRAGMENT-BASED TIMER: re-renders only the timer widget every second ──
-                    # No full page rerun → zero flicker on question/answer area
+                    # ── SMOOTH TIMER via st.fragment ────────────────────────────
+                    # st.fragment(run_every=1) reruns ONLY this block every second.
+                    # Everything outside (question card, text area, buttons) is untouched
+                    # — zero blinking on the rest of the page.
+                    # When time expires, the fragment sets a session_state flag and calls
+                    # st.rerun() to trigger a full-page rerun for auto-submit processing.
+
                     @st.fragment(run_every=1)
-                    def _render_timer():
-                        _elapsed = time.time() - st.session_state.question_timer_start
+                    def _timer_fragment():
+                        _elapsed   = time.time() - st.session_state.question_timer_start
                         _remaining = max(0, st.session_state.timer_seconds - _elapsed)
-                        _mins = int(_remaining // 60)
-                        _secs = int(_remaining % 60)
-                        _urgent_class = "timer-urgent" if _remaining <= 30 else ""
+                        _mins      = int(_remaining // 60)
+                        _secs      = int(_remaining % 60)
+                        _pct       = 1.0 - (_remaining / st.session_state.timer_seconds)
+                        _urgent    = _remaining <= 30
+
+                        _timer_color    = "#f87171" if _urgent else "#fbbf24"
+                        _border_color   = "rgba(244,67,54,0.45)" if _urgent else "rgba(251,191,36,0.25)"
+                        _bg             = ("linear-gradient(135deg,rgba(244,67,54,0.12),rgba(244,67,54,0.06))"
+                                           if _urgent else
+                                           "linear-gradient(135deg,rgba(251,191,36,0.08),rgba(251,191,36,0.04))")
+                        _bar_color      = "#ef4444" if _urgent else "#f59e0b"
+                        _pulse_style    = "animation:t4pulse 1s ease-in-out infinite;" if _urgent else ""
+
                         st.markdown(f"""
-                        <div class="timer-container">
-                            <div class="timer-display {_urgent_class}">
-                                ⏰ Time Remaining: {_mins:02d}:{_secs:02d}
+                        <style>
+                          @keyframes t4pulse {{
+                            0%,100% {{ box-shadow: 0 0 0 0 rgba(244,67,54,0.0); }}
+                            50%      {{ box-shadow: 0 0 0 6px rgba(244,67,54,0.18); }}
+                          }}
+                        </style>
+                        <div style="background:{_bg};border:1px solid {_border_color};
+                                    border-radius:12px;padding:14px;text-align:center;
+                                    font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;
+                                    {_pulse_style}">
+                          <div style="font-size:1.4rem;font-weight:700;color:{_timer_color};
+                                      letter-spacing:-0.01em;">
+                            ⏰ Time Remaining: {_mins:02d}:{_secs:02d}
+                          </div>
+                          <div style="width:100%;height:4px;background:rgba(255,255,255,0.08);
+                                      border-radius:99px;margin-top:10px;overflow:hidden;">
+                            <div style="width:{int(_pct*100)}%;height:100%;border-radius:99px;
+                                        background:{_bar_color};transition:width 0.9s linear;">
                             </div>
+                          </div>
                         </div>
                         """, unsafe_allow_html=True)
-                        _progress_value = (_remaining / st.session_state.timer_seconds) if st.session_state.timer_seconds > 0 else 0
-                        # Progress bar drains left to right
-                        st.progress(max(0.0, min(1.0, 1.0 - _progress_value)))
-                        # When timer hits zero: set flag + trigger ONE full rerun for auto-submit
-                        # Guard: only fire st.rerun() once (when flag goes False → True)
-                        # After that, dynamic_answer_submitted becomes True so this never re-fires
-                        if _remaining <= 0 and not st.session_state.get('dynamic_answer_submitted', False):
-                            if not st.session_state.get('timer_expired', False):
-                                st.session_state.timer_expired = True
-                                st.rerun()  # safe: dynamic_answer_submitted will be True after this
 
-                    _render_timer()
+                        # When time runs out, set a flag and do a FULL APP rerun for auto-submit.
+                        # CRITICAL: must use st.rerun(scope="app") — plain st.rerun() inside a
+                        # fragment only reruns the fragment, never the outer page.
+                        if _remaining <= 0 and not st.session_state.get("dynamic_answer_submitted", False):
+                            if not st.session_state.get("_timer_expired", False):
+                                st.session_state["_timer_expired"] = True
+                                st.rerun(scope="app")
 
-                    # Auto-submit: runs on the full rerun triggered above
-                    if st.session_state.get('timer_expired', False) and not st.session_state.dynamic_answer_submitted:
-                        st.session_state.timer_expired = False  # reset immediately to prevent re-trigger
-                        if not answer.strip():
-                            answer = "⚠️ No Answer"
-                        with st.spinner("Evaluating your answer..."):
-                            _process_submission(
-                                answer, question,
-                                st.session_state.current_dynamic_interview_question,
-                                questions_answered
-                            )
-                        st.warning("⏰ Time's up! Answer auto-submitted.")
-                        st.rerun()
+                    _timer_fragment()
 
                     # Question display with phase indicator
                     phase_badge = "📄 Resume-Based Question" if current_index <= num_resume_qs else "💼 Generic Interview Question"
@@ -20003,7 +20016,6 @@ Generate {num_questions} questions now:
                             st.session_state.dynamic_answer_submitted = False
                             st.session_state.current_interview_question_text = ""
                             st.session_state.question_timer_start = None
-                            st.session_state.timer_expired = False
                             st.session_state.interview_result_saved = False
                             st.session_state.interview_final_duration_seconds = None
                             st.session_state.interview_actual_start_time = None
@@ -20118,7 +20130,22 @@ Generate {num_questions} questions now:
                     if 'pending_followup_strategy' not in st.session_state:
                         st.session_state.pending_followup_strategy = ""
 
-                    # Submit answer button
+                    # Auto-submit: triggered either by the fragment setting _timer_expired flag,
+                    # or by a natural rerun where remaining_time is already 0
+                    _timer_expired_flag = st.session_state.pop("_timer_expired", False)
+                    if (_timer_expired_flag or remaining_time <= 0) and not st.session_state.dynamic_answer_submitted:
+                        if not answer.strip():
+                            answer = "⚠️ No Answer"
+                        with st.spinner("Evaluating your answer..."):
+                            _process_submission(
+                                answer, question,
+                                st.session_state.current_dynamic_interview_question,
+                                questions_answered
+                            )
+                        st.warning("⏰ Time's up! Answer auto-submitted.")
+                        st.rerun()
+
+                    # Submit answer button — shown whenever answer not yet submitted
                     if not st.session_state.dynamic_answer_submitted:
                         if st.button("Submit Answer & Get Feedback"):
                             if answer.strip():
@@ -20210,7 +20237,6 @@ Generate {num_questions} questions now:
                                     st.session_state.current_interview_question_text = f"Additional question for {selected_role}"
                                 # TIMER RESET: Reset timer for next question
                                 st.session_state.question_timer_start = time.time()
-                                st.session_state.timer_expired = False
                                 st.rerun()
 
                     # Progress bar for interview completion
@@ -20241,7 +20267,10 @@ Generate {num_questions} questions now:
                                     if i < num_to_show - 1:  # Don't add separator after last item
                                         st.markdown("---")
 
-                    # Auto-refresh handled by @st.fragment(run_every=1) above — no sleep/rerun needed
+                    # NOTE: No more time.sleep(1) + st.rerun() here.
+                    # The JS timer inside the components.html block above handles
+                    # the visual countdown entirely in the browser. Auto-submit
+                    # is triggered by the hidden __TIMER_EXPIRED__ button click.
                 else:
                     # CRITICAL FIX: All questions answered, move to completion automatically
                     # Capture exact duration at auto-completion moment
