@@ -19871,7 +19871,9 @@ Generate {num_questions} questions now:
                             st.session_state.interview_actual_start_time = time.time()
                             st.session_state.dynamic_answer_submitted = False
                             st.session_state.current_interview_question_text = all_questions[0]
-                            st.session_state.question_timer_start = time.time()
+                            # Set to None — timer will be stamped on first render of the
+                            # interview page (after rerun), not here before sleep/animation
+                            st.session_state.question_timer_start = None
                             st.session_state.timer_seconds = timer_seconds
                             st.session_state.interview_difficulty = interview_difficulty
                             st.session_state.interview_mode = interview_type
@@ -19922,20 +19924,23 @@ Generate {num_questions} questions now:
                 if questions_answered < st.session_state.original_num_questions:
                     question = st.session_state.current_interview_question_text or st.session_state.dynamic_interview_questions[st.session_state.current_dynamic_interview_question]
 
-                    # TIMER RESET: Reset timer every time a new question loads
+                    # TIMER RESET: Stamp the timer on first render of this question.
+                    # question_timer_start is set to None before the st.rerun() that
+                    # brings us here, so the clock starts on the very first frame the
+                    # user actually sees — not seconds earlier during question generation.
                     if st.session_state.question_timer_start is None:
                         st.session_state.question_timer_start = time.time()
 
-                    # Calculate remaining time
+                    # Calculate remaining time (used for auto-submit guard below)
                     elapsed_time = time.time() - st.session_state.question_timer_start
                     remaining_time = max(0, st.session_state.timer_seconds - elapsed_time)
 
                     # ── SMOOTH TIMER via st.fragment ────────────────────────────
-                    # st.fragment(run_every=1) reruns ONLY this block every second.
-                    # Everything outside (question card, text area, buttons) is untouched
-                    # — zero blinking on the rest of the page.
-                    # When time expires, the fragment sets a session_state flag and calls
-                    # st.rerun() to trigger a full-page rerun for auto-submit processing.
+                    # Rendered ABOVE the question card so it's the first element the
+                    # user sees. st.fragment(run_every=1) reruns ONLY this block every
+                    # second — question card, text area, and buttons never blink.
+                    # When time expires the fragment sets _timer_expired and calls
+                    # st.rerun(scope="app") to trigger auto-submit in the outer page.
 
                     @st.fragment(run_every=1)
                     def _timer_fragment():
@@ -19999,8 +20004,10 @@ Generate {num_questions} questions now:
                                 st.session_state["_timer_expired"] = True
                                 st.rerun(scope="app")
 
-                    # Question display with phase indicator — rendered BEFORE the timer fragment
-                    # so Ctrl+Enter / fragment reruns never cause it to vanish
+                    # ── Timer renders ABOVE the question card ─────────────
+                    _timer_fragment()
+
+                    # Question display with phase indicator
                     phase_badge = "📄 Resume-Based Question" if current_index <= num_resume_qs else "💼 Generic Interview Question"
                     st.markdown(f"""
                     <div class="quiz-card">
@@ -20012,36 +20019,6 @@ Generate {num_questions} questions now:
                         <p style="font-size:1rem;color:#f0f4f8;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;line-height:1.6;margin:14px 0;">{question}</p>
                     </div>
                     """, unsafe_allow_html=True)
-
-                    _timer_fragment()
-
-                    # Add refresh button for regenerating all interview questions
-                    col1, col2 = st.columns([3, 1])
-                    with col2:
-                        if st.button("🔄 Refresh Interview"):
-                            # Clear all interview state
-                            st.session_state.dynamic_interview_questions = []
-                            st.session_state.current_dynamic_interview_question = 0
-                            st.session_state.dynamic_interview_answers = []
-                            st.session_state.dynamic_interview_scores = []
-                            st.session_state.dynamic_interview_feedbacks = []
-                            st.session_state.dynamic_interview_completed = False
-                            st.session_state.dynamic_interview_started = False
-                            st.session_state.dynamic_answer_submitted = False
-                            st.session_state.current_interview_question_text = ""
-                            st.session_state.question_timer_start = None
-                            st.session_state.interview_result_saved = False
-                            st.session_state.interview_final_duration_seconds = None
-                            st.session_state.interview_actual_start_time = None
-                            st.session_state.pending_followup_display = ""
-                            st.session_state.pending_followup_strategy = ""
-                            st.session_state.escalation_layer = 1
-                            st.session_state.follow_up_count = 0
-                            st.session_state.current_interview_id = None
-                            st.session_state.question_db_ids = []
-                            st.session_state.pop("_timer_expired", None)  # clear stale flag
-                            # Force regeneration
-                            st.rerun()
 
                     # Answer input with character limit
                     answer_key = f"dynamic_interview_answer_{st.session_state.current_dynamic_interview_question}"
@@ -20259,6 +20236,34 @@ Generate {num_questions} questions now:
                     interview_progress = questions_answered / st.session_state.original_num_questions
                     st.markdown("### Interview Progress")
                     st.progress(interview_progress)
+
+                    # ── Refresh Interview button — always visible, never inside a column
+                    # block tied to the answer/submit flow, so Ctrl+Enter reruns cannot
+                    # make it disappear. ─────────────────────────────────────────────
+                    st.markdown("<div style='margin-top:8px;'>", unsafe_allow_html=True)
+                    if st.button("🔄 Refresh Interview", key="refresh_interview_btn"):
+                        st.session_state.dynamic_interview_questions = []
+                        st.session_state.current_dynamic_interview_question = 0
+                        st.session_state.dynamic_interview_answers = []
+                        st.session_state.dynamic_interview_scores = []
+                        st.session_state.dynamic_interview_feedbacks = []
+                        st.session_state.dynamic_interview_completed = False
+                        st.session_state.dynamic_interview_started = False
+                        st.session_state.dynamic_answer_submitted = False
+                        st.session_state.current_interview_question_text = ""
+                        st.session_state.question_timer_start = None
+                        st.session_state.interview_result_saved = False
+                        st.session_state.interview_final_duration_seconds = None
+                        st.session_state.interview_actual_start_time = None
+                        st.session_state.pending_followup_display = ""
+                        st.session_state.pending_followup_strategy = ""
+                        st.session_state.escalation_layer = 1
+                        st.session_state.follow_up_count = 0
+                        st.session_state.current_interview_id = None
+                        st.session_state.question_db_ids = []
+                        st.session_state.pop("_timer_expired", None)
+                        st.rerun()
+                    st.markdown("</div>", unsafe_allow_html=True)
 
                     # CRITICAL FIX: Review Previous Answers - show all properly
                     if len(st.session_state.dynamic_interview_answers) > 0:
