@@ -87,7 +87,11 @@ from user_login import (
     get_user_by_email,
     update_password_by_email,
     is_strong_password,
-    domain_has_mx_record
+    domain_has_mx_record,
+    create_login_token,
+    verify_login_token,
+    send_login_confirmation_email,
+    get_email_by_username,
 )
 
 # ============================================================
@@ -284,6 +288,30 @@ LENGTH: 3 short-to-medium paragraphs. Maximum 350 words.
 # ✅ Initialize database in persistent storage
 create_user_table()
 
+# ------------------- Login Token Handler -------------------
+# Runs on every page load. If the URL carries ?login_token=<token>,
+# validate it and complete the login — this is the "Yes, it's me" click.
+_login_token = st.query_params.get("login_token", None)
+if _login_token and not st.session_state.get("authenticated", False):
+    _username, _groq_key = verify_login_token(_login_token)
+    if _username:
+        st.session_state.authenticated = True
+        st.session_state.username = _username
+        st.session_state.user_groq_key = _groq_key or ""
+        st.session_state.login_stage = "credentials"
+        st.session_state.pending_login_username = None
+        log_user_action(_username, "login")
+        # Remove the token from the URL so a refresh doesn't re-submit it
+        st.query_params.clear()
+        st.rerun()
+    else:
+        # Token invalid, expired, or already used — show a one-time error
+        if "token_error_shown" not in st.session_state:
+            st.session_state.token_error_shown = True
+            st.query_params.clear()
+            notify("login", "error", "❌ This login link is invalid or has expired. Please sign in again.")
+            st.rerun()
+
 # ------------------- Tab-Specific Notification System -------------------
 if "login_notification" not in st.session_state:
     st.session_state.login_notification = {"type": None, "text": None, "expires": 0.0}
@@ -423,6 +451,14 @@ if "username" not in st.session_state:
     st.session_state.username = None
 if "processed_files" not in st.session_state:
     st.session_state.processed_files = set()
+
+# Login confirmation flow states
+if "login_stage" not in st.session_state:
+    # "credentials"  → normal sign-in form
+    # "awaiting_email" → credentials verified, confirmation email sent, waiting
+    st.session_state.login_stage = "credentials"
+if "pending_login_username" not in st.session_state:
+    st.session_state.pending_login_username = None
 
 # Forgot password session states
 if "reset_stage" not in st.session_state:
@@ -1788,37 +1824,102 @@ if not st.session_state.get("authenticated", False):
         with login_tab:
             # Show login or forgot password flow based on reset_stage
             if st.session_state.reset_stage == "none":
-                # Normal Login UI
-                st.markdown("""<h3 style='color:#9aa4af; text-align:center; font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Roboto,sans-serif; font-size:0.82rem; font-weight:500; letter-spacing:0.06em; text-transform:uppercase; margin-bottom:24px;'>Welcome Back</h3>""", unsafe_allow_html=True)
 
-                user = st.text_input("Username or Email", key="login_user")
-                pwd = st.text_input("Password", type="password", key="login_pass")
+                # ── Stage A: Credentials entry ──────────────────────────────
+                if st.session_state.login_stage == "credentials":
+                    st.markdown("""<h3 style='color:#9aa4af; text-align:center; font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Roboto,sans-serif; font-size:0.82rem; font-weight:500; letter-spacing:0.06em; text-transform:uppercase; margin-bottom:24px;'>Welcome Back</h3>""", unsafe_allow_html=True)
 
-                # Render notification area (reserves space)
-                render_notification("login")
+                    user = st.text_input("Username or Email", key="login_user")
+                    pwd = st.text_input("Password", type="password", key="login_pass")
 
-                if st.button("Sign In", key="login_btn", use_container_width=True):
-                    success, saved_key = verify_user(user.strip(), pwd.strip())
-                    if success:
-                        st.session_state.authenticated = True
-                        # username is already set in session by verify_user()
-                        if saved_key:
-                            st.session_state["user_groq_key"] = saved_key
-                        log_user_action(st.session_state.username, "login")
+                    # Render notification area (reserves space)
+                    render_notification("login")
 
-                        notify("login", "success", "✅ Login successful!")
-                        time.sleep(3.0)
+                    if st.button("Sign In", key="login_btn", use_container_width=True):
+                        success, _ = verify_user(user.strip(), pwd.strip())
+                        if success:
+                            # Credentials OK — look up email and send confirmation link
+                            _uname = st.session_state.username   # set by verify_user()
+                            _email = get_email_by_username(_uname)
+                            if _email:
+                                _token = create_login_token(_uname)
+                                sent = send_login_confirmation_email(_email, _uname, _token)
+                                if sent:
+                                    # Move to waiting stage; clear the partial auth set by verify_user
+                                    st.session_state.authenticated = False
+                                    st.session_state.pending_login_username = _uname
+                                    st.session_state.login_stage = "awaiting_email"
+                                    st.rerun()
+                                else:
+                                    st.session_state.authenticated = False
+                                    notify("login", "error", "❌ Could not send confirmation email. Please try again.")
+                                    st.rerun()
+                            else:
+                                # Account has no email on record — cannot send link
+                                st.session_state.authenticated = False
+                                notify("login", "error", "❌ No email address is associated with this account. Please contact support.")
+                                st.rerun()
+                        else:
+                            st.session_state.authenticated = False
+                            notify("login", "error", "❌ Invalid credentials. Please try again.")
+                            st.rerun()
+
+                    st.markdown("<br>", unsafe_allow_html=True)
+
+                    # Forgot Password Link
+                    if st.button("Forgot Password?", key="forgot_pw_link"):
+                        st.session_state.reset_stage = "request_email"
                         st.rerun()
-                    else:
-                        notify("login", "error", "❌ Invalid credentials. Please try again.")
-                        st.rerun()
 
-                st.markdown("<br>", unsafe_allow_html=True)
+                # ── Stage B: Waiting for email confirmation ─────────────────
+                elif st.session_state.login_stage == "awaiting_email":
+                    _pending = st.session_state.pending_login_username or "you"
+                    _masked_email = ""
+                    _raw_email = get_email_by_username(_pending) if _pending != "you" else None
+                    if _raw_email:
+                        _parts = _raw_email.split("@")
+                        _masked_email = _parts[0][:2] + "***@" + _parts[1]
 
-                # Forgot Password Link
-                if st.button("Forgot Password?", key="forgot_pw_link"):
-                    st.session_state.reset_stage = "request_email"
-                    st.rerun()
+                    st.markdown(f"""
+                    <div style="
+                        text-align:center;
+                        padding: 28px 16px 20px;
+                        font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',Roboto,sans-serif;
+                    ">
+                        <div style="font-size:2.6rem; margin-bottom:12px;">📧</div>
+                        <div style="font-size:1.05rem; font-weight:600; color:#e6edf3; margin-bottom:8px;">
+                            Check your email
+                        </div>
+                        <div style="font-size:0.85rem; color:#8b9ab0; line-height:1.6;">
+                            We sent a confirmation link to<br>
+                            <strong style="color:#c9d1d9;">{_masked_email}</strong><br><br>
+                            Click <em>"Yes, it's me"</em> in the email to complete your sign-in.<br>
+                            The link expires in <strong style="color:#fbbf24;">10 minutes</strong>.
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    render_notification("login")
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("🔄 Resend link", key="resend_confirm_btn", use_container_width=True):
+                            _uname = st.session_state.pending_login_username
+                            _email = get_email_by_username(_uname)
+                            if _email:
+                                _token = create_login_token(_uname)
+                                sent = send_login_confirmation_email(_email, _uname, _token)
+                                if sent:
+                                    notify("login", "success", "📨 New confirmation link sent!")
+                                else:
+                                    notify("login", "error", "❌ Failed to resend. Please try again.")
+                            st.rerun()
+                    with col2:
+                        if st.button("↩️ Back", key="back_from_confirm_btn", use_container_width=True):
+                            st.session_state.login_stage = "credentials"
+                            st.session_state.pending_login_username = None
+                            st.session_state.authenticated = False
+                            st.rerun()
 
             # ============================================================
             # FORGOT PASSWORD FLOW - Stage 1: Request Email
@@ -3592,7 +3693,7 @@ Work Experience → Projects → Education → Certifications & Links
 
 CONTACT HEADER: Full Name | Job Title | Email | Phone | Location | LinkedIn URL | GitHub/Portfolio URL
 
-PROFESSIONAL SUMMARY (2–3 sentences, max 60 words):
+PROFESSIONAL SUMMARY (3–4 sentences, max 100 words):
   Sentence 1: [Seniority level] + [core domain] + [years of experience]
   Sentence 2: [Top 2–3 specific technical or functional strengths]
   Sentence 3: [Career value proposition — what the candidate delivers]
@@ -3613,7 +3714,14 @@ PROJECTS: Name | Tech Stack | Duration
   • [Achievement bullet with action verb and metric]
   (3–5 bullets)
 
-EDUCATION: Degree, Major | Institution | Graduation Year
+EDUCATION: Degree, Major | Institution | Graduation Year | CGPA (if mentioned)
+  • Capture ALL details written under each education entry as bullets, including:
+    - Relevant coursework (e.g., "Relevant Coursework: Data Structures, ML, DBMS")
+    - Academic honors, awards, distinctions (e.g., "Dean's List", "Top 5% of batch")
+    - Thesis or final year project title
+    - Extracurricular academic activities (e.g., IEEE member, coding club)
+    - Any other detail the candidate wrote under their education entry
+  DO NOT drop or ignore any sub-detail written under an education entry.
 CERTIFICATIONS: • Name | Issuing Body | MMM YYYY
 
 ATS FORMATTING:
@@ -3683,6 +3791,7 @@ RETURN ONLY THIS EXACT JSON STRUCTURE:
       "degree": "",
       "institution": "",
       "year": "",
+      "cgpa": "",
       "bullets": []
     }}
   ],
@@ -3706,7 +3815,9 @@ FIELD RULES:
 - "skills" = flat array of individual skill strings. Minimum 8. No duplicates.
 - "soft_skills" = professional competency phrases. Must NOT duplicate items in "skills".
 - "contact.*" = extract exactly as written. Use "" not null for missing fields.
-- "summary" = 2–3 sentences, max 60 words, no pronouns.
+- "summary" = 3–4 sentences, max 100 words, no pronouns. NEVER truncate mid-sentence.
+- "education[].cgpa" = CGPA or GPA value as a string (e.g., "8.5/10", "3.8/4.0"). Use "" if not mentioned.
+- "education[].bullets" = ALL sub-details written under that education entry: coursework, honors, awards, thesis, clubs, achievements. Capture every line — do NOT leave this array empty if the candidate wrote anything under their education.
 - "experience[].description" = 1-sentence role scope, unique from bullets.
 - "experience[].bullets" = 3–5 bullets each. Strong verb + task + tech + impact.
 - "projects[].bullets" = must NOT restate experience bullets.
@@ -4567,10 +4678,16 @@ def generate_modern_docx(data: dict) -> BytesIO:
                 r_inst.font.color.rgb = RGBColor(74, 74, 74)
             p.paragraph_format.space_before = Pt(6)
             p.paragraph_format.space_after = Pt(0)
-            if edu.get("year") and edu["year"] not in ("", "[Not Provided]"):
+            # ── Year + optional CGPA on same line ──────────────────────────
+            _yr_str = edu.get("year", "") if edu.get("year", "") not in ("", "[Not Provided]") else ""
+            _cgpa_str = edu.get("cgpa", "") if edu.get("cgpa", "") not in ("", "[Not Provided]") else ""
+            if _yr_str or _cgpa_str:
                 p_yr = doc.add_paragraph()
                 p_yr.clear()
-                r_yr = p_yr.add_run(edu["year"])
+                yr_line = _yr_str
+                if _cgpa_str:
+                    yr_line = f"{_yr_str}  |  CGPA: {_cgpa_str}" if _yr_str else f"CGPA: {_cgpa_str}"
+                r_yr = p_yr.add_run(yr_line)
                 r_yr.italic = True
                 r_yr.font.size = Pt(BODY - 1)
                 r_yr.font.name = FONT
@@ -4857,10 +4974,16 @@ def generate_minimal_docx(data: dict) -> BytesIO:
                 r_inst.font.color.rgb = RGBColor(*DARK_GRAY)
             p.paragraph_format.space_before = Pt(6)
             p.paragraph_format.space_after = Pt(0)
-            if edu.get("year") and edu["year"] not in ("", "[Not Provided]"):
+            # ── Year + optional CGPA on same line ──────────────────────────
+            _yr_str = edu.get("year", "") if edu.get("year", "") not in ("", "[Not Provided]") else ""
+            _cgpa_str = edu.get("cgpa", "") if edu.get("cgpa", "") not in ("", "[Not Provided]") else ""
+            if _yr_str or _cgpa_str:
                 p_yr = doc.add_paragraph()
                 p_yr.clear()
-                r_yr = p_yr.add_run(edu["year"])
+                yr_line = _yr_str
+                if _cgpa_str:
+                    yr_line = f"{_yr_str}  |  CGPA: {_cgpa_str}" if _yr_str else f"CGPA: {_cgpa_str}"
+                r_yr = p_yr.add_run(yr_line)
                 r_yr.italic = True
                 r_yr.font.size = Pt(BODY - 1)
                 r_yr.font.name = FONT
@@ -5159,10 +5282,16 @@ def generate_creative_docx(data: dict) -> BytesIO:
                 r2.font.color.rgb = RGBColor(*TEAL)
             p.paragraph_format.space_before = Pt(6)
             p.paragraph_format.space_after = Pt(0)
-            if edu.get("year") and edu["year"] not in ("", "[Not Provided]"):
+            # ── Year + optional CGPA on same line ──────────────────────────
+            _yr_str = edu.get("year", "") if edu.get("year", "") not in ("", "[Not Provided]") else ""
+            _cgpa_str = edu.get("cgpa", "") if edu.get("cgpa", "") not in ("", "[Not Provided]") else ""
+            if _yr_str or _cgpa_str:
                 p_yr = doc.add_paragraph()
                 p_yr.clear()
-                r3 = p_yr.add_run(edu["year"])
+                yr_line = _yr_str
+                if _cgpa_str:
+                    yr_line = f"{_yr_str}  |  CGPA: {_cgpa_str}" if _yr_str else f"CGPA: {_cgpa_str}"
+                r3 = p_yr.add_run(yr_line)
                 r3.italic = True
                 r3.font.size = Pt(BODY - 1)
                 r3.font.name = FONT_BODY
@@ -6348,98 +6477,36 @@ if uploaded_files and job_description:
         # ✅ Extract structured ATS values
         candidate_name = ats_scores.get("Candidate Name", "Not Found")
 
-        # ── Candidate name resolution (LLM-first, filename as validated fallback) ──
-        #
-        # Design: neither source is blindly trusted. Both are run through the
-        # same _looks_like_person_name() validator before use. LLM always wins
-        # when valid; filename is only used when the LLM result fails validation.
-        #
-        # Fixes:
-        #   1. Job-title filenames (e.g. "mobile_app_developer_resume.pdf") no
-        #      longer override a correct LLM name.
-        #   2. Low character-overlap no longer triggers a blind filename override.
-        #   3. Single-word extractions from either source are rejected.
-
-        # Comprehensive set of words that appear in job-title filenames but are
-        # never part of a person's name. Extend as needed.
-        _NAME_STOP_WORDS: set[str] = {
-            # document meta
-            "resume", "cv", "curriculum", "vitae", "updated", "final",
-            "new", "latest", "copy", "draft", "version", "doc",
-            "v1", "v2", "v3", "v4", "v5",
-            "2022", "2023", "2024", "2025", "2026",
-            # seniority / role qualifiers
-            "senior", "junior", "lead", "principal", "staff", "associate",
-            "intern", "entry", "mid", "level",
-            # job-title nouns
-            "developer", "engineer", "designer", "manager", "analyst",
-            "consultant", "architect", "director", "officer", "specialist",
-            "coordinator", "executive", "recruiter", "advisor", "strategist",
-            "scientist", "researcher", "administrator", "technician",
-            # tech-domain prefixes that appear in filenames
-            "mobile", "app", "web", "data", "software", "frontend", "backend",
-            "fullstack", "full", "stack", "cloud", "devops", "qa", "product",
-            "project", "platform", "site", "ui", "ux", "ml", "ai", "it",
-            "cyber", "security", "network", "systems", "database", "infra",
-        }
-
-        def _looks_like_person_name(name: str) -> bool:
-            """Return True only if *name* plausibly looks like a human full name.
-
-            Rules (all must pass):
-              • 2–4 tokens (first + last, optionally middle / suffix)
-              • Every token is letters-only, length 2-25
-              • No token is a known job-title / document-meta stop word
-              • Not a bare placeholder string
-            """
-            _placeholder_values = {
-                "not found", "n/a", "unknown", "none", "", "name not found",
-                "candidate name not found",
-                "extract full name from resume header or contact section",
-                "copy the candidate's full name exactly as it appears in the resume",
-                "copy the candidates full name exactly as it appears in the resume",
-            }
-            if name.lower().strip() in _placeholder_values:
-                return False
-            tokens = name.strip().split()
-            if not (2 <= len(tokens) <= 4):
-                return False
-            for tok in tokens:
-                tok_l = tok.lower()
-                if tok_l in _NAME_STOP_WORDS:
-                    return False
-                if not re.match(r"^[a-zA-Z]{2,25}$", tok):
-                    return False
-            return True
-
+        # ── Filename-based name fallback (reliable ground truth) ─────────────
         def _name_from_filename(fname: str) -> str:
-            """Extract a candidate name from the filename, or return '' if none found.
-
-            Stops at the first stop-word or digit token; requires ≥ 2 name tokens
-            so that single-word job titles (e.g. 'Engineer.pdf') are rejected.
-            """
+            stop_words = {
+                "resume", "cv", "curriculum", "vitae", "updated", "final",
+                "new", "latest", "copy", "draft", "version", "doc",
+                "v1", "v2", "v3", "v4", "v5",
+                "2022", "2023", "2024", "2025", "2026",
+            }
             base = os.path.splitext(fname)[0]
             base = re.sub(r"[\(\)\[\]_\-\.]", " ", base)
             base = re.sub(r"\s+", " ", base).strip()
-            parts: list[str] = []
+            parts = []
             for word in base.split():
-                if word.lower() in _NAME_STOP_WORDS or word.isdigit():
+                if word.lower() in stop_words or word.isdigit():
                     break
-                if re.match(r"^[A-Za-z]{2,25}$", word):
+                if re.match(r"^[A-Za-z]+$", word):
                     parts.append(word.title())
-            return " ".join(parts) if len(parts) >= 2 else ""
+            return " ".join(parts) if len(parts) >= 1 else ""
 
-        # ── Resolution logic ──────────────────────────────────────────────────
-        _llm_valid      = _looks_like_person_name(candidate_name)
-        _filename_name  = _name_from_filename(uploaded_file.name)
-        _filename_valid = _looks_like_person_name(_filename_name)
+        _filename_name = _name_from_filename(uploaded_file.name)
+        _bad_name_values = {"not found", "n/a", "unknown", "none", ""}
 
-        if _llm_valid:
-            pass                            # LLM passed validation — keep it
-        elif _filename_valid:
-            candidate_name = _filename_name  # LLM failed, filename looks real
-        else:
-            candidate_name = "Not Found"    # both unreliable
+        if candidate_name.lower() in _bad_name_values and _filename_name:
+            candidate_name = _filename_name
+        elif _filename_name and candidate_name.lower() not in _bad_name_values:
+            llm_chars  = set(candidate_name.lower().replace(" ", ""))
+            file_chars = set(_filename_name.lower().replace(" ", ""))
+            overlap = len(llm_chars & file_chars) / max(len(file_chars), 1)
+            if overlap < 0.4:
+                candidate_name = _filename_name
         # ─────────────────────────────────────────────────────────────────────
 
         ats_score = ats_scores.get("ATS Match %", 0)
@@ -19999,9 +20066,8 @@ Generate {num_questions} questions now:
                                 st.session_state["_timer_expired"] = True
                                 st.rerun(scope="app")
 
-                    _timer_fragment()
-
-                    # Question display with phase indicator
+                    # Question display with phase indicator — rendered BEFORE the timer fragment
+                    # so Ctrl+Enter / fragment reruns never cause it to vanish
                     phase_badge = "📄 Resume-Based Question" if current_index <= num_resume_qs else "💼 Generic Interview Question"
                     st.markdown(f"""
                     <div class="quiz-card">
@@ -20013,6 +20079,8 @@ Generate {num_questions} questions now:
                         <p style="font-size:1rem;color:#f0f4f8;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;line-height:1.6;margin:14px 0;">{question}</p>
                     </div>
                     """, unsafe_allow_html=True)
+
+                    _timer_fragment()
 
                     # Add refresh button for regenerating all interview questions
                     col1, col2 = st.columns([3, 1])
