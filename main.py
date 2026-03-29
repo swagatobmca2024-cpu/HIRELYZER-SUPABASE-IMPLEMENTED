@@ -16,12 +16,9 @@ from collections import Counter
 from datetime import datetime
 import time
 
-# ── Concurrency limiters ─────────────────────────────────────────────────────
-# _OCR_SEMAPHORE : max 2 simultaneous OCR jobs — prevents RAM OOM crashes.
-# llm_semaphore  : max 2 simultaneous LLM API calls — prevents Groq rate-limit
-#                  errors and API overload when many users upload at once.
+# ── Concurrency limiter: max 2 OCR jobs run simultaneously across all users ──
+# Others wait instead of crashing the server with OOM errors.
 _OCR_SEMAPHORE = threading.Semaphore(2)
-llm_semaphore  = threading.Semaphore(2)
 
 # Third-party library imports
 import streamlit as st
@@ -256,8 +253,7 @@ LENGTH: 3 short-to-medium paragraphs. Maximum 350 words.
         # ✅ Call LLM
         with st.spinner("✉️ Generating cover letter..."):
             try:
-                with llm_semaphore:
-                    cover_letter = call_llm(prompt, session=st.session_state).strip()
+                cover_letter = call_llm(prompt, session=st.session_state).strip()
             except Exception as e:
                 st.error(f"❌ Failed to generate cover letter: {e}")
                 return
@@ -2669,9 +2665,10 @@ torch.backends.cudnn.benchmark = True
 working_dir = os.path.dirname(os.path.abspath(__file__))
 
 # ------------------- Lazy Initialization -------------------
-# get_easyocr_reader() removed — OCR is now handled by pytesseract (lightweight,
-# no 400 MB model download). pytesseract uses system Tesseract binary which is
-# pre-installed on Streamlit Cloud and most Linux servers.
+@st.cache_resource(show_spinner=False)
+def get_easyocr_reader():
+    import easyocr
+    return easyocr.Reader(["en"], gpu=torch.cuda.is_available())
 
 @st.cache_data(show_spinner=False)
 def ensure_nltk():
@@ -2679,11 +2676,14 @@ def ensure_nltk():
     nltk.download('wordnet', quiet=True)
     return WordNetLemmatizer()
 
-# ── Lazy init ──────────────────────────────────────────────────────────────
-# lemmatizer loaded once here — NLTK is lightweight (~2 MB), safe at startup.
-# OCR is handled lazily inside extract_text_from_images() via pytesseract —
-# no model download needed, no RAM spike at startup.
-lemmatizer = ensure_nltk()
+# ── Lazy init: do NOT call these at module level ──────────────────────────
+# Both are loaded on first actual use (cached after that via st.cache_resource /
+# st.cache_data). Loading EasyOCR at startup costs ~400 MB RAM and crashes the
+# server before any resume is even uploaded.
+#
+# lemmatizer  → accessed via ensure_nltk()   wherever needed
+# OCR reader  → accessed via get_easyocr_reader() inside extract_text_from_images
+lemmatizer = ensure_nltk()   # NLTK is lightweight — safe to keep at module level
 
 def generate_docx(text, filename="bias_free_resume.docx"):
     doc = Document()
@@ -2846,27 +2846,16 @@ def extract_text_from_images(pdf_path):
     """
     OCR fallback for scanned / image-based PDFs.
 
-    Uses pytesseract (lightweight, no model download) instead of EasyOCR so
-    the server does not load a 400 MB neural-network on startup.
-
     Multi-user safety measures:
       • _OCR_SEMAPHORE caps concurrent OCR jobs at 2 across ALL users.
-      • Reads file as bytes → convert_from_bytes (no extra disk I/O).
       • Pages converted ONE AT A TIME — never all pages in RAM together.
-      • dpi=100 — 56% less RAM than higher DPI settings, still OCR-accurate for resumes.
+      • dpi=100 (was 150) — 56% less RAM, still OCR-accurate for resumes.
       • Max 3 pages — resumes are 1-2 pages; caps worst-case RAM per job.
       • del + gc.collect() after every page — memory freed immediately.
     """
-    import pytesseract
-    from pdf2image import convert_from_bytes
-
     results = []
     with _OCR_SEMAPHORE:   # at most 2 concurrent OCR jobs across ALL users
         try:
-            with open(pdf_path, "rb") as _f:
-                pdf_bytes = _f.read()
-
-            # Find real page count so we never request beyond what exists
             try:
                 import fitz as _fitz
                 _doc = _fitz.open(pdf_path)
@@ -2875,11 +2864,12 @@ def extract_text_from_images(pdf_path):
             except Exception:
                 total_pages = 3
 
+            ocr_reader = get_easyocr_reader()  # cached — loads once globally
+
             for page_num in range(1, total_pages + 1):
                 try:
-                    # convert_from_bytes — no temp file needed, one page at a time
-                    page_images = convert_from_bytes(
-                        pdf_bytes,
+                    page_images = convert_from_path(
+                        pdf_path,
                         dpi=100,
                         first_page=page_num,
                         last_page=page_num
@@ -2888,11 +2878,14 @@ def extract_text_from_images(pdf_path):
                         continue
 
                     pil_img = page_images[0]
-                    del page_images          # free list immediately
+                    del page_images
 
-                    page_text = pytesseract.image_to_string(pil_img)
-                    del pil_img              # free PIL image immediately
-                    gc.collect()             # force reclaim before next page
+                    img_array = np.array(pil_img)
+                    del pil_img
+
+                    page_text = "\n".join(ocr_reader.readtext(img_array, detail=0))
+                    del img_array
+                    gc.collect()
 
                     if page_text.strip():
                         results.append(page_text)
@@ -2900,9 +2893,6 @@ def extract_text_from_images(pdf_path):
                 except Exception as page_err:
                     st.warning(f"⚠ OCR failed on page {page_num}: {page_err}")
                     continue
-
-            del pdf_bytes                    # free raw bytes after all pages done
-            gc.collect()
 
         except Exception as e:
             st.error(f"⚠ OCR pipeline error: {e}")
@@ -5465,8 +5455,7 @@ Suggestions:
 ---
 """
 
-    with llm_semaphore:
-        response = call_llm(grammar_prompt, session=st.session_state).strip()
+    response = call_llm(grammar_prompt, session=st.session_state).strip()
     score_match = re.search(r"Score:\s*(\d+)", response)
     feedback_match = re.search(r"Feedback:\s*(.+)", response)
     suggestions = re.findall(r"- (.+)", response)
@@ -5515,8 +5504,7 @@ JOB TEXT (first 600 chars):
 {job_description[:600]}
 """
     try:
-        with llm_semaphore:
-            _domain_raw = call_llm(_domain_prompt, session=st.session_state).strip()
+        _domain_raw = call_llm(_domain_prompt, session=st.session_state).strip()
         _parts = [p.strip() for p in _domain_raw.split("|")]
         resume_domain = _parts[0] if len(_parts) == 2 and _parts[0] in _valid_domains else "Software Engineering"
         job_domain    = _parts[1] if len(_parts) == 2 and _parts[1] in _valid_domains else "Software Engineering"
@@ -5790,8 +5778,7 @@ SCORING SCALE for language ({lang_weight} pts max):
 """
    
    
-    with llm_semaphore:
-        ats_result = call_llm(prompt, session=st.session_state).strip()
+    ats_result = call_llm(prompt, session=st.session_state).strip()
 
     # ── CRITICAL: Overwrite any LLM-modified Format Score/Grade lines ────
     # The LLM sometimes rewrites these despite instructions. Force the true
@@ -6021,19 +6008,11 @@ SCORING SCALE for language ({lang_weight} pts max):
         "Domain Similarity Score": similarity_score
     }
 
-# ── S8: Cache HuggingFaceEmbeddings — loaded once, shared across all users ──
-# Without caching this downloads + loads the sentence-transformer model on
-# every call, which is slow (~2–4 s) and wastes memory for concurrent users.
-@st.cache_resource(show_spinner=False)
-def _get_embeddings():
-    emb = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    if DEVICE == "cuda":
-        emb.model = emb.model.to(torch.device("cuda"))
-    return emb
-
 # Setup Vector DB
 def setup_vectorstore(documents):
-    embeddings = _get_embeddings()   # cached — no reload for concurrent users
+    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    if DEVICE == "cuda":
+        embeddings.model = embeddings.model.to(torch.device("cuda"))
     text_splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=100)
     doc_chunks = text_splitter.split_text("\n".join(documents))
     return FAISS.from_texts(doc_chunks, embeddings)
@@ -6179,14 +6158,6 @@ with tab1:
             with st.container():
                 st.subheader(f"📄 Original Resume Preview: {uploaded_file.name}")
 
-                # ── S6: Reject oversized files early in preview loop too ──
-                if uploaded_file.size > 5 * 1024 * 1024:
-                    st.warning(
-                        f"⚠️ **{uploaded_file.name}** exceeds 5 MB "
-                        f"({uploaded_file.size/(1024*1024):.1f} MB). Please reduce file size."
-                    )
-                    continue
-
                 try:
                     # ✅ Show PDF preview safely
                     pdf_viewer(
@@ -6239,15 +6210,6 @@ if uploaded_files and job_description:
 
     for uploaded_file in uploaded_files:
         if uploaded_file.name in st.session_state.processed_files:
-            continue
-
-        # ── S6: Memory protection — reject files > 5 MB before any processing ──
-        MAX_FILE_BYTES = 5 * 1024 * 1024   # 5 MB
-        if uploaded_file.size > MAX_FILE_BYTES:
-            st.warning(
-                f"⚠️ **{uploaded_file.name}** is {uploaded_file.size / (1024*1024):.1f} MB — "
-                f"maximum allowed size is 5 MB. Please compress or re-export the PDF and try again."
-            )
             continue
 
         # ✅ Improved optimized scanner animation with better performance
@@ -6434,12 +6396,7 @@ if uploaded_files and job_description:
         all_text.append(" ".join(text))
         full_text = " ".join(text)
 
-        # ── S3: LLM input protection — truncate to 12 000 chars to prevent
-        # token overflow on Groq / LLaMA models. Bias detection uses the full
-        # text (pure regex, no token limit), LLM calls use the safe version.
-        llm_safe_text = full_text[:12000]
-
-        # ✅ Bias detection (uses full text — no LLM, no token concern)
+        # ✅ Bias detection
         bias_score, masc_count, fem_count, detected_masc, detected_fem = detect_bias(full_text)
 
         # ⚡ MERGED: single LLM call returns BOTH plain-text rewrite AND JSON.
@@ -6447,7 +6404,7 @@ if uploaded_files and job_description:
         with st.spinner("✍️ Rewriting resume & generating optimised structure..."):
             try:
                 highlighted_text, rewritten_text, _, _, _, _, json_str = rewrite_and_highlight(
-                    llm_safe_text, replacement_mapping, user_location
+                    full_text, replacement_mapping, user_location
                 )
             except Exception:
                 highlighted_text = full_text
@@ -6472,7 +6429,7 @@ if uploaded_files and job_description:
         # ✅ LLM-based ATS Evaluation (includes domain detection + grammar scoring internally)
         with st.spinner("🔍 Running ATS evaluation..."):
             ats_result, ats_scores = ats_percentage_score(
-                resume_text=llm_safe_text,
+                resume_text=full_text,
                 job_description=job_description,
                 logic_profile_score=None,
                 edu_weight=edu_weight,
