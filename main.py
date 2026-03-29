@@ -20017,7 +20017,13 @@ Generate {num_questions} questions now:
                             st.session_state.interview_actual_start_time = time.time()
                             st.session_state.dynamic_answer_submitted = False
                             st.session_state.current_interview_question_text = all_questions[0]
-                            st.session_state.question_timer_start = time.time()
+                            # ── TIMER FIX: do NOT start timer here. The timer starts
+                            # on the first render of the interview page (below), AFTER
+                            # st.rerun() fires and the page is actually shown to the user.
+                            # Starting it here causes the animation + rerun latency
+                            # (~3-5 s) to be silently consumed before the user sees 5:00.
+                            st.session_state.question_timer_start = None
+                            st.session_state._timer_needs_reset = True
                             st.session_state.timer_seconds = timer_seconds
                             st.session_state.interview_difficulty = interview_difficulty
                             st.session_state.interview_mode = interview_type
@@ -20077,9 +20083,14 @@ Generate {num_questions} questions now:
                 if questions_answered < st.session_state.original_num_questions:
                     question = st.session_state.current_interview_question_text or st.session_state.dynamic_interview_questions[st.session_state.current_dynamic_interview_question]
 
-                    # TIMER RESET: Reset timer every time a new question loads
-                    if st.session_state.question_timer_start is None:
+                    # TIMER FIX: Start timer on first render of this question.
+                    # _timer_needs_reset is set True by the "Start Interview" button
+                    # so the clock only begins when the page is actually visible to
+                    # the user — not during the setup / animation / rerun cycle.
+                    if st.session_state.question_timer_start is None or \
+                            st.session_state.get("_timer_needs_reset", False):
                         st.session_state.question_timer_start = time.time()
+                        st.session_state._timer_needs_reset = False
 
                     # ── Calculate remaining time (server-side, passed to JS) ──
                     elapsed_time   = time.time() - st.session_state.question_timer_start
@@ -20423,8 +20434,11 @@ Generate {num_questions} questions now:
                                 else:
                                     # Safety check - if we're out of questions but haven't answered all, generate one
                                     st.session_state.current_interview_question_text = f"Additional question for {selected_role}"
-                                # TIMER RESET: Reset timer for next question
-                                st.session_state.question_timer_start = time.time()
+                                # TIMER FIX: Mark timer for reset — it will start on the
+                                # next render after rerun, not here on the button click,
+                                # so rerun latency does not eat into the question time.
+                                st.session_state.question_timer_start = None
+                                st.session_state._timer_needs_reset = True
                                 st.rerun()
 
                     # Progress bar for interview completion
