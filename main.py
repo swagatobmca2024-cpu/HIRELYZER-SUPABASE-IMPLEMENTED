@@ -20,6 +20,16 @@ import time
 # Others wait instead of crashing the server with OOM errors.
 _OCR_SEMAPHORE = threading.Semaphore(2)
 
+# ── LLM semaphore: max 2 concurrent LLM calls across ALL users ───────────────
+# Prevents API overload / quota exhaustion under simultaneous resume uploads.
+_LLM_SEMAPHORE = threading.Semaphore(2)
+
+# ── Maximum allowed upload size (bytes) — 5 MB ───────────────────────────────
+_MAX_RESUME_BYTES = 5 * 1024 * 1024   # 5 MB
+
+# ── Maximum characters sent to the LLM (token-overflow guard) ────────────────
+_MAX_LLM_CHARS = 12_000
+
 # Third-party library imports
 import streamlit as st
 import streamlit.components.v1 as components
@@ -31,7 +41,12 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import altair as alt
 from PIL import Image
-from pdf2image import convert_from_path
+from pdf2image import convert_from_bytes
+try:
+    import pytesseract as _pytesseract          # OCR fallback (secondary engine)
+    _PYTESSERACT_AVAILABLE = True
+except ImportError:
+    _PYTESSERACT_AVAILABLE = False
 from dotenv import load_dotenv
 from nltk.stem import WordNetLemmatizer
 from docx import Document
@@ -2811,17 +2826,30 @@ def _extract_page_text_smart(page) -> str:
     return "\n".join(b[4].strip() for b in all_sorted)
 
 
-def extract_text_from_pdf(file_path):
+def extract_text_from_pdf(file_path_or_bytes):
     """
     Extract text from PDF using PyMuPDF (fitz) first.
-    Only falls back to OCR when fitz returns fewer than 100 meaningful characters
+
+    Accepts either a file-system path (str) or raw PDF bytes.
+    Falls back to OCR when fitz returns fewer than 50 meaningful characters
     — which indicates a scanned / image-only PDF.
 
-    This prevents unnecessary EasyOCR invocations on normal text-based resumes,
-    which is the most common upload type.
+    Improvements vs previous version
+    ─────────────────────────────────
+    • Works with in-memory bytes (no temp file required for the fast path).
+    • OCR threshold lowered to 50 chars (spec requirement).
+    • Passes pdf_bytes directly to extract_text_from_images — no second disk read.
     """
     try:
-        doc = fitz.open(file_path)
+        # ── Open from path or raw bytes ───────────────────────────────────────
+        if isinstance(file_path_or_bytes, (bytes, bytearray)):
+            pdf_bytes = bytes(file_path_or_bytes)
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        else:
+            doc = fitz.open(file_path_or_bytes)
+            with open(file_path_or_bytes, "rb") as _f:
+                pdf_bytes = _f.read()
+
         text_list = []
         for page in doc:
             page_text = _extract_page_text_smart(page)
@@ -2830,11 +2858,11 @@ def extract_text_from_pdf(file_path):
         doc.close()
 
         # Only invoke OCR when fitz genuinely found nothing useful.
-        # < 100 chars across all pages = image-based PDF (scanned resume).
+        # < 50 chars across all pages = image-based PDF (scanned resume).
         total_chars = sum(len(t.strip()) for t in text_list)
-        if total_chars < 100:
+        if total_chars < 50:
             with st.spinner("📷 Scanned PDF detected — running OCR (this may take 30–60s)..."):
-                return extract_text_from_images(file_path)
+                return extract_text_from_images(pdf_bytes)
 
         return text_list
 
@@ -2842,37 +2870,42 @@ def extract_text_from_pdf(file_path):
         st.error(f"⚠ Error extracting text: {e}")
         return []
 
-def extract_text_from_images(pdf_path):
+
+def extract_text_from_images(pdf_bytes: bytes):
     """
     OCR fallback for scanned / image-based PDFs.
 
-    Multi-user safety measures:
-      • _OCR_SEMAPHORE caps concurrent OCR jobs at 2 across ALL users.
-      • Pages converted ONE AT A TIME — never all pages in RAM together.
-      • dpi=100 (was 150) — 56% less RAM, still OCR-accurate for resumes.
-      • Max 3 pages — resumes are 1-2 pages; caps worst-case RAM per job.
-      • del + gc.collect() after every page — memory freed immediately.
+    Accepts raw PDF bytes — no temp file, no path collision between users.
+
+    Multi-user safety measures
+    ──────────────────────────
+    • _OCR_SEMAPHORE  — caps concurrent OCR jobs at 2 across ALL users.
+    • Pages converted ONE AT A TIME via convert_from_bytes — no full-doc RAM spike.
+    • dpi=100 — 56 % less RAM vs 150 dpi; still OCR-accurate for resumes.
+    • Max 3 pages — resumes are 1-2 pages; caps worst-case RAM per job.
+    • EasyOCR primary, pytesseract secondary — resilient across environments.
+    • del + gc.collect() after every page — memory freed immediately.
+
+    Returns list of per-page text strings (empty list on full failure).
     """
     results = []
-    with _OCR_SEMAPHORE:   # at most 2 concurrent OCR jobs across ALL users
+    with _OCR_SEMAPHORE:
         try:
+            # Determine page count from the bytes directly (no disk I/O needed)
             try:
-                import fitz as _fitz
-                _doc = _fitz.open(pdf_path)
-                total_pages = min(_doc.page_count, 3)
-                _doc.close()
+                _doc_tmp = fitz.open(stream=pdf_bytes, filetype="pdf")
+                total_pages = min(_doc_tmp.page_count, 3)
+                _doc_tmp.close()
             except Exception:
                 total_pages = 3
 
-            ocr_reader = get_easyocr_reader()  # cached — loads once globally
-
             for page_num in range(1, total_pages + 1):
                 try:
-                    page_images = convert_from_path(
-                        pdf_path,
+                    page_images = convert_from_bytes(
+                        pdf_bytes,
                         dpi=100,
                         first_page=page_num,
-                        last_page=page_num
+                        last_page=page_num,
                     )
                     if not page_images:
                         continue
@@ -2880,11 +2913,22 @@ def extract_text_from_images(pdf_path):
                     pil_img = page_images[0]
                     del page_images
 
-                    img_array = np.array(pil_img)
-                    del pil_img
+                    # ── Primary OCR engine: EasyOCR (cached, GPU-aware) ───────
+                    page_text = ""
+                    try:
+                        ocr_reader = get_easyocr_reader()
+                        img_array = np.array(pil_img)
+                        page_text = "\n".join(ocr_reader.readtext(img_array, detail=0))
+                        del img_array
+                    except Exception:
+                        # ── Secondary OCR engine: pytesseract ─────────────────
+                        if _PYTESSERACT_AVAILABLE:
+                            try:
+                                page_text = _pytesseract.image_to_string(pil_img)
+                            except Exception:
+                                page_text = ""
 
-                    page_text = "\n".join(ocr_reader.readtext(img_array, detail=0))
-                    del img_array
+                    del pil_img
                     gc.collect()
 
                     if page_text.strip():
@@ -2901,34 +2945,47 @@ def extract_text_from_images(pdf_path):
 
 def safe_extract_text(uploaded_file):
     """
-    Safely extracts text from uploaded file.
-    Prevents app crash if file is not a resume or unreadable.
-    """
-    # UUID prefix prevents two users uploading same-named files from colliding
-    _uid = uuid.uuid4().hex[:8]
-    temp_path = f"/tmp/{_uid}_{uploaded_file.name}"
-    try:
-        with open(temp_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
+    Safely extracts text from an uploaded Streamlit file object.
 
-        text_list = extract_text_from_pdf(temp_path)
+    Improvements
+    ────────────
+    • File-size gate (>5 MB) — prevents OOM on Streamlit Cloud.
+    • Operates on in-memory bytes — no temp-file for the fitz fast path.
+    • OCR result too short (<50 chars) → skips analysis gracefully.
+    • Full try/except isolation — one user's bad file cannot crash the app.
+    """
+    # ── Section 6: Memory protection — reject oversized uploads ─────────────
+    file_bytes = uploaded_file.getbuffer()
+    if len(file_bytes) > _MAX_RESUME_BYTES:
+        st.warning(
+            f"⚠️ **{uploaded_file.name}** is larger than 5 MB "
+            "and was skipped to prevent memory issues. "
+            "Please compress or re-export the PDF."
+        )
+        return None
+
+    try:
+        text_list = extract_text_from_pdf(bytes(file_bytes))
 
         if not text_list or all(len(t.strip()) == 0 for t in text_list):
             st.warning("⚠️ This file doesn't look like a resume or contains no readable text.")
             return None
 
-        return "\n".join(text_list)
+        full_text = "\n".join(text_list)
+
+        # ── Section 2: OCR result too short → skip analysis ─────────────────
+        if len(full_text.strip()) < 50:
+            st.warning(
+                f"⚠️ **{uploaded_file.name}** — OCR could not extract enough text "
+                "(less than 50 characters recovered). Analysis skipped."
+            )
+            return None
+
+        return full_text
 
     except Exception as e:
         st.error(f"⚠️ Could not process this file: {e}")
         return None
-    finally:
-        # Always clean up — prevents /tmp disk fill-up over time
-        try:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-        except Exception:
-            pass
 
 
 # ============================================================
@@ -3799,10 +3856,11 @@ FIELD RULES:
 - Missing fields: use "[Not Provided]" for text, [] for arrays.
 
 RESUME TEXT:
-\"\"\"{text}\"\"\"
+\"\"\"{text[:_MAX_LLM_CHARS]}\"\"\"
 """
 
-    raw_response = call_llm(prompt, session=st.session_state)
+    with _LLM_SEMAPHORE:
+        raw_response = call_llm(prompt, session=st.session_state)
 
     # ── Parse the two sections out of the combined response ──────────────
     rewritten_text = ""
@@ -5772,13 +5830,14 @@ SCORING SCALE for language ({lang_weight} pts max):
 {job_description}
 
 📄 **RESUME TEXT:**
-{resume_text}
+{resume_text[:_MAX_LLM_CHARS]}
 
 {logic_score_note}
 """
    
    
-    ats_result = call_llm(prompt, session=st.session_state).strip()
+    with _LLM_SEMAPHORE:
+        ats_result = call_llm(prompt, session=st.session_state).strip()
 
     # ── CRITICAL: Overwrite any LLM-modified Format Score/Grade lines ────
     # The LLM sometimes rewrites these despite instructions. Force the true
@@ -6008,11 +6067,17 @@ SCORING SCALE for language ({lang_weight} pts max):
         "Domain Similarity Score": similarity_score
     }
 
-# Setup Vector DB
-def setup_vectorstore(documents):
+@st.cache_resource(show_spinner=False)
+def _get_hf_embeddings():
+    """Load HuggingFaceEmbeddings once and cache across all users/sessions."""
     embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
     if DEVICE == "cuda":
         embeddings.model = embeddings.model.to(torch.device("cuda"))
+    return embeddings
+
+# Setup Vector DB
+def setup_vectorstore(documents):
+    embeddings = _get_hf_embeddings()
     text_splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=100)
     doc_chunks = text_splitter.split_text("\n".join(documents))
     return FAISS.from_texts(doc_chunks, embeddings)
@@ -6368,258 +6433,285 @@ if uploaded_files and job_description:
         
         scanner_placeholder.markdown(OPTIMIZED_SCANNER_HTML, unsafe_allow_html=True)
 
-        # ✅ Save uploaded file with UUID prefix — prevents concurrent user collisions
-        # (e.g. two users uploading "resume.pdf" simultaneously would overwrite each other)
-        _uid = uuid.uuid4().hex[:8]
-        file_path = os.path.join("/tmp", f"{_uid}_{uploaded_file.name}")
+        # ── Section 7: Error isolation — one bad resume cannot crash the app ──
         try:
-            with open(file_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
+
+            # ── Section 6: File-size gate — reject oversized uploads early ────
+            _file_size = uploaded_file.size
+            if _file_size > _MAX_RESUME_BYTES:
+                st.warning(
+                    f"⚠️ **{uploaded_file.name}** exceeds 5 MB ({_file_size // (1024*1024)} MB) "
+                    "and was skipped to prevent memory issues. "
+                    "Please compress or re-export the PDF."
+                )
+                scanner_placeholder.empty()
+                continue
+
+            # ── Read file bytes once — shared by extraction + format checker ─
+            _pdf_bytes = uploaded_file.getbuffer()
 
             # ✅ Reduced delay for better UX
             time.sleep(4)
 
-            # ✅ Extract text from PDF
-            text = extract_text_from_pdf(file_path)
+            # ── Section 1 & 2: Extract text (fitz fast-path → OCR fallback) ──
+            text = extract_text_from_pdf(bytes(_pdf_bytes))
             if not text:
                 st.warning(f"⚠️ Could not extract text from {uploaded_file.name}. Skipping.")
                 scanner_placeholder.empty()
                 continue
-        finally:
-            # ✅ Always clean up temp file — prevents disk fill-up over time
-            try:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-            except Exception:
-                pass
 
-        all_text.append(" ".join(text))
-        full_text = " ".join(text)
+            all_text.append(" ".join(text))
+            full_text = " ".join(text)
 
-        # ✅ Bias detection
-        bias_score, masc_count, fem_count, detected_masc, detected_fem = detect_bias(full_text)
-
-        # ⚡ MERGED: single LLM call returns BOTH plain-text rewrite AND JSON.
-        # json_str is the structured JSON for DOCX generation — no second call needed.
-        with st.spinner("✍️ Rewriting resume & generating optimised structure..."):
-            try:
-                highlighted_text, rewritten_text, _, _, _, _, json_str = rewrite_and_highlight(
-                    full_text, replacement_mapping, user_location
+            # ── Section 2: Skip analysis if OCR result is still too short ────
+            if len(full_text.strip()) < 50:
+                st.warning(
+                    f"⚠️ **{uploaded_file.name}** — not enough text recovered "
+                    "(< 50 characters). Analysis skipped."
                 )
+                scanner_placeholder.empty()
+                continue
+
+            # ── Section 3: Truncate text before all LLM calls ────────────────
+            llm_text = full_text[:_MAX_LLM_CHARS]
+
+            # ── Bias detection (no LLM — uses full text) ─────────────────────
+            bias_score, masc_count, fem_count, detected_masc, detected_fem = detect_bias(full_text)
+
+            # ⚡ MERGED: single LLM call returns BOTH plain-text rewrite AND JSON.
+            # json_str is the structured JSON for DOCX generation — no second call needed.
+            with st.spinner("✍️ Rewriting resume & generating optimised structure..."):
+                try:
+                    highlighted_text, rewritten_text, _, _, _, _, json_str = rewrite_and_highlight(
+                        llm_text, replacement_mapping, user_location
+                    )
+                except Exception:
+                    highlighted_text = full_text
+                    rewritten_text   = full_text
+                    json_str         = ""
+
+            # ✅ Resume Optimization Module — reuse JSON already produced above (0 extra LLM calls)
+            try:
+                optimized_resume_data = extract_resume_json(json_str)
             except Exception:
-                highlighted_text = full_text
-                rewritten_text   = full_text
-                json_str         = ""
+                optimized_resume_data = extract_resume_json("")  # falls back to empty skeleton
 
-        # ✅ Resume Optimization Module — reuse JSON already produced above (0 extra LLM calls)
-        try:
-            optimized_resume_data = extract_resume_json(json_str)
-        except Exception:
-            optimized_resume_data = extract_resume_json("")  # falls back to empty skeleton
+            # ── Format check — use in-memory fitz open (no file_path needed) ─
+            try:
+                _doc_check = fitz.open(stream=bytes(_pdf_bytes), filetype="pdf")
+                num_pages = _doc_check.page_count
+                _doc_check.close()
+            except Exception:
+                num_pages = 1
+            # format checker uses full_text (not truncated) for word-count accuracy
+            format_data = check_resume_format(full_text, num_pages, pdf_path=None)
 
-        # ✅ Format check (industry standard — no LLM call)
-        try:
-            doc_check = fitz.open(file_path)
-            num_pages = doc_check.page_count
-            doc_check.close()
-        except Exception:
-            num_pages = 1
-        format_data = check_resume_format(full_text, num_pages, pdf_path=file_path)
+            # ✅ LLM-based ATS Evaluation — truncated text fed to LLM
+            with st.spinner("🔍 Running ATS evaluation..."):
+                ats_result, ats_scores = ats_percentage_score(
+                    resume_text=llm_text,
+                    job_description=job_description,
+                    logic_profile_score=None,
+                    edu_weight=edu_weight,
+                    exp_weight=exp_weight,
+                    skills_weight=skills_weight,
+                    lang_weight=lang_weight,
+                    keyword_weight=keyword_weight,
+                    format_data=format_data,
+                )
 
-        # ✅ LLM-based ATS Evaluation (includes domain detection + grammar scoring internally)
-        with st.spinner("🔍 Running ATS evaluation..."):
-            ats_result, ats_scores = ats_percentage_score(
-                resume_text=full_text,
-                job_description=job_description,
-                logic_profile_score=None,
-                edu_weight=edu_weight,
-                exp_weight=exp_weight,
-                skills_weight=skills_weight,
-                lang_weight=lang_weight,
-                keyword_weight=keyword_weight,
-                format_data=format_data,
+            # ✅ Extract structured ATS values
+            candidate_name = ats_scores.get("Candidate Name", "Not Found")
+
+            # ── Candidate name resolution (LLM-first, filename as validated fallback) ──
+            #
+            # Design: neither source is blindly trusted. Both are run through the
+            # same _looks_like_person_name() validator before use. LLM always wins
+            # when valid; filename is only used when the LLM result fails validation.
+            #
+            # Fixes:
+            #   1. Job-title filenames (e.g. "mobile_app_developer_resume.pdf") no
+            #      longer override a correct LLM name.
+            #   2. Low character-overlap no longer triggers a blind filename override.
+            #   3. Single-word extractions from either source are rejected.
+
+            # Comprehensive set of words that appear in job-title filenames but are
+            # never part of a person's name. Extend as needed.
+            _NAME_STOP_WORDS: set[str] = {
+                # document meta
+                "resume", "cv", "curriculum", "vitae", "updated", "final",
+                "new", "latest", "copy", "draft", "version", "doc",
+                "v1", "v2", "v3", "v4", "v5",
+                "2022", "2023", "2024", "2025", "2026",
+                # seniority / role qualifiers
+                "senior", "junior", "lead", "principal", "staff", "associate",
+                "intern", "entry", "mid", "level",
+                # job-title nouns
+                "developer", "engineer", "designer", "manager", "analyst",
+                "consultant", "architect", "director", "officer", "specialist",
+                "coordinator", "executive", "recruiter", "advisor", "strategist",
+                "scientist", "researcher", "administrator", "technician",
+                # tech-domain prefixes that appear in filenames
+                "mobile", "app", "web", "data", "software", "frontend", "backend",
+                "fullstack", "full", "stack", "cloud", "devops", "qa", "product",
+                "project", "platform", "site", "ui", "ux", "ml", "ai", "it",
+                "cyber", "security", "network", "systems", "database", "infra",
+            }
+
+            def _looks_like_person_name(name: str) -> bool:
+                """Return True only if *name* plausibly looks like a human full name.
+
+                Rules (all must pass):
+                  • 2–4 tokens (first + last, optionally middle / suffix)
+                  • Every token is letters-only, length 2-25
+                  • No token is a known job-title / document-meta stop word
+                  • Not a bare placeholder string
+                """
+                _placeholder_values = {
+                    "not found", "n/a", "unknown", "none", "", "name not found",
+                    "candidate name not found",
+                    "extract full name from resume header or contact section",
+                    "copy the candidate's full name exactly as it appears in the resume",
+                    "copy the candidates full name exactly as it appears in the resume",
+                }
+                if name.lower().strip() in _placeholder_values:
+                    return False
+                tokens = name.strip().split()
+                if not (2 <= len(tokens) <= 4):
+                    return False
+                for tok in tokens:
+                    tok_l = tok.lower()
+                    if tok_l in _NAME_STOP_WORDS:
+                        return False
+                    if not re.match(r"^[a-zA-Z]{2,25}$", tok):
+                        return False
+                return True
+
+            def _name_from_filename(fname: str) -> str:
+                """Extract a candidate name from the filename, or return '' if none found.
+
+                Stops at the first stop-word or digit token; requires ≥ 2 name tokens
+                so that single-word job titles (e.g. 'Engineer.pdf') are rejected.
+                """
+                base = os.path.splitext(fname)[0]
+                base = re.sub(r"[\(\)\[\]_\-\.]", " ", base)
+                base = re.sub(r"\s+", " ", base).strip()
+                parts: list[str] = []
+                for word in base.split():
+                    if word.lower() in _NAME_STOP_WORDS or word.isdigit():
+                        break
+                    if re.match(r"^[A-Za-z]{2,25}$", word):
+                        parts.append(word.title())
+                return " ".join(parts) if len(parts) >= 2 else ""
+
+            # ── Resolution logic ──────────────────────────────────────────────────
+            _llm_valid      = _looks_like_person_name(candidate_name)
+            _filename_name  = _name_from_filename(uploaded_file.name)
+            _filename_valid = _looks_like_person_name(_filename_name)
+
+            if _llm_valid:
+                pass                            # LLM passed validation — keep it
+            elif _filename_valid:
+                candidate_name = _filename_name  # LLM failed, filename looks real
+            else:
+                candidate_name = "Not Found"    # both unreliable
+            # ─────────────────────────────────────────────────────────────────────
+
+            ats_score = ats_scores.get("ATS Match %", 0)
+            edu_score = ats_scores.get("Education Score", 0)
+            exp_score = ats_scores.get("Experience Score", 0)
+            skills_score = ats_scores.get("Skills Score", 0)
+            lang_score = ats_scores.get("Language Score", 0)
+            keyword_score = ats_scores.get("Keyword Score", 0)
+            fmt_score = ats_scores.get("Format Score", format_data.get("format_score", 0))
+            formatted_score = ats_scores.get("Formatted Score", "N/A")
+            fit_summary = ats_scores.get("Final Thoughts", "N/A")
+            language_analysis_full = ats_scores.get("Language Analysis", "N/A")
+
+            missing_keywords_raw = ats_scores.get("Missing Keywords", "N/A")
+            missing_skills_raw = ats_scores.get("Missing Skills", "N/A")
+            missing_keywords = [kw.strip() for kw in missing_keywords_raw.split(",") if kw.strip()] if missing_keywords_raw != "N/A" else []
+            missing_skills = [sk.strip() for sk in missing_skills_raw.split(",") if sk.strip()] if missing_skills_raw != "N/A" else []
+
+            bias_flag = "High Bias" if bias_score > 0.6 else "Fair"
+            ats_flag  = "Low ATS"   if ats_score < 50   else "Good ATS"
+
+            # Reuse domain already detected inside ats_percentage_score — no extra LLM call
+            domain = ats_scores.get("Resume Domain", "Unknown")
+
+            # ✅ Store everything in session state (Section 5 — session isolation)
+            st.session_state.resume_data.append({
+                "Resume Name": uploaded_file.name,
+                "Candidate Name": candidate_name,
+                "ATS Report": ats_result,
+                "ATS Match %": ats_score,
+                "Formatted Score": formatted_score,
+                "Education Score": edu_score,
+                "Experience Score": exp_score,
+                "Skills Score": skills_score,
+                "Language Score": lang_score,
+                "Keyword Score": keyword_score,
+                "Format Score": ats_scores.get("Format Score", 0),
+                "Format Grade": ats_scores.get("Format Grade", "N/A"),
+                "Format Label": ats_scores.get("Format Label", ""),
+                "Format Issues": ats_scores.get("Format Issues", []),
+                "Format Passes": ats_scores.get("Format Passes", []),
+                "Education Analysis": ats_scores.get("Education Analysis", ""),
+                "Experience Analysis": ats_scores.get("Experience Analysis", ""),
+                "Skills Analysis": ats_scores.get("Skills Analysis", ""),
+                "Language Analysis": language_analysis_full,
+                "Keyword Analysis": ats_scores.get("Keyword Analysis", ""),
+                "Format Analysis": ats_scores.get("Format Analysis", ""),
+                "Final Thoughts": fit_summary,
+                "Missing Keywords": missing_keywords,
+                "Missing Skills": missing_skills,
+                "Bias Score (0 = Fair, 1 = Biased)": bias_score,
+                "Bias Status": bias_flag,
+                "Masculine Words": masc_count,
+                "Feminine Words": fem_count,
+                "Detected Masculine Words": detected_masc,
+                "Detected Feminine Words": detected_fem,
+                "Text Preview": full_text[:300] + "...",
+                "Highlighted Text": highlighted_text,
+                "Rewritten Text": rewritten_text,
+                "Optimized Resume Data": optimized_resume_data,
+                "Domain": domain,
+                "Domain Penalty": ats_scores.get("Domain Penalty", 0),
+                "Domain Similarity Score": ats_scores.get("Domain Similarity Score", 1.0),
+                "Resume Domain": ats_scores.get("Resume Domain", domain),
+                "Job Domain": ats_scores.get("Job Domain", "Unknown"),
+            })
+
+            insert_candidate(
+                (
+                    uploaded_file.name,
+                    candidate_name,
+                    ats_score,
+                    edu_score,
+                    exp_score,
+                    skills_score,
+                    lang_score,
+                    keyword_score,
+                    bias_score,
+                    fmt_score,   # ← format_score now saved to DB
+                ),
+                job_title=job_title,
+                job_description=job_description
             )
 
-        # ✅ Extract structured ATS values
-        candidate_name = ats_scores.get("Candidate Name", "Not Found")
+            st.session_state.processed_files.add(uploaded_file.name)
 
-        # ── Candidate name resolution (LLM-first, filename as validated fallback) ──
-        #
-        # Design: neither source is blindly trusted. Both are run through the
-        # same _looks_like_person_name() validator before use. LLM always wins
-        # when valid; filename is only used when the LLM result fails validation.
-        #
-        # Fixes:
-        #   1. Job-title filenames (e.g. "mobile_app_developer_resume.pdf") no
-        #      longer override a correct LLM name.
-        #   2. Low character-overlap no longer triggers a blind filename override.
-        #   3. Single-word extractions from either source are rejected.
-
-        # Comprehensive set of words that appear in job-title filenames but are
-        # never part of a person's name. Extend as needed.
-        _NAME_STOP_WORDS: set[str] = {
-            # document meta
-            "resume", "cv", "curriculum", "vitae", "updated", "final",
-            "new", "latest", "copy", "draft", "version", "doc",
-            "v1", "v2", "v3", "v4", "v5",
-            "2022", "2023", "2024", "2025", "2026",
-            # seniority / role qualifiers
-            "senior", "junior", "lead", "principal", "staff", "associate",
-            "intern", "entry", "mid", "level",
-            # job-title nouns
-            "developer", "engineer", "designer", "manager", "analyst",
-            "consultant", "architect", "director", "officer", "specialist",
-            "coordinator", "executive", "recruiter", "advisor", "strategist",
-            "scientist", "researcher", "administrator", "technician",
-            # tech-domain prefixes that appear in filenames
-            "mobile", "app", "web", "data", "software", "frontend", "backend",
-            "fullstack", "full", "stack", "cloud", "devops", "qa", "product",
-            "project", "platform", "site", "ui", "ux", "ml", "ai", "it",
-            "cyber", "security", "network", "systems", "database", "infra",
-        }
-
-        def _looks_like_person_name(name: str) -> bool:
-            """Return True only if *name* plausibly looks like a human full name.
-
-            Rules (all must pass):
-              • 2–4 tokens (first + last, optionally middle / suffix)
-              • Every token is letters-only, length 2-25
-              • No token is a known job-title / document-meta stop word
-              • Not a bare placeholder string
-            """
-            _placeholder_values = {
-                "not found", "n/a", "unknown", "none", "", "name not found",
-                "candidate name not found",
-                "extract full name from resume header or contact section",
-                "copy the candidate's full name exactly as it appears in the resume",
-                "copy the candidates full name exactly as it appears in the resume",
-            }
-            if name.lower().strip() in _placeholder_values:
-                return False
-            tokens = name.strip().split()
-            if not (2 <= len(tokens) <= 4):
-                return False
-            for tok in tokens:
-                tok_l = tok.lower()
-                if tok_l in _NAME_STOP_WORDS:
-                    return False
-                if not re.match(r"^[a-zA-Z]{2,25}$", tok):
-                    return False
-            return True
-
-        def _name_from_filename(fname: str) -> str:
-            """Extract a candidate name from the filename, or return '' if none found.
-
-            Stops at the first stop-word or digit token; requires ≥ 2 name tokens
-            so that single-word job titles (e.g. 'Engineer.pdf') are rejected.
-            """
-            base = os.path.splitext(fname)[0]
-            base = re.sub(r"[\(\)\[\]_\-\.]", " ", base)
-            base = re.sub(r"\s+", " ", base).strip()
-            parts: list[str] = []
-            for word in base.split():
-                if word.lower() in _NAME_STOP_WORDS or word.isdigit():
-                    break
-                if re.match(r"^[A-Za-z]{2,25}$", word):
-                    parts.append(word.title())
-            return " ".join(parts) if len(parts) >= 2 else ""
-
-        # ── Resolution logic ──────────────────────────────────────────────────
-        _llm_valid      = _looks_like_person_name(candidate_name)
-        _filename_name  = _name_from_filename(uploaded_file.name)
-        _filename_valid = _looks_like_person_name(_filename_name)
-
-        if _llm_valid:
-            pass                            # LLM passed validation — keep it
-        elif _filename_valid:
-            candidate_name = _filename_name  # LLM failed, filename looks real
-        else:
-            candidate_name = "Not Found"    # both unreliable
-        # ─────────────────────────────────────────────────────────────────────
-
-        ats_score = ats_scores.get("ATS Match %", 0)
-        edu_score = ats_scores.get("Education Score", 0)
-        exp_score = ats_scores.get("Experience Score", 0)
-        skills_score = ats_scores.get("Skills Score", 0)
-        lang_score = ats_scores.get("Language Score", 0)
-        keyword_score = ats_scores.get("Keyword Score", 0)
-        fmt_score = ats_scores.get("Format Score", format_data.get("format_score", 0))
-        formatted_score = ats_scores.get("Formatted Score", "N/A")
-        fit_summary = ats_scores.get("Final Thoughts", "N/A")
-        language_analysis_full = ats_scores.get("Language Analysis", "N/A")
-
-        missing_keywords_raw = ats_scores.get("Missing Keywords", "N/A")
-        missing_skills_raw = ats_scores.get("Missing Skills", "N/A")
-        missing_keywords = [kw.strip() for kw in missing_keywords_raw.split(",") if kw.strip()] if missing_keywords_raw != "N/A" else []
-        missing_skills = [sk.strip() for sk in missing_skills_raw.split(",") if sk.strip()] if missing_skills_raw != "N/A" else []
-
-        bias_flag = "High Bias" if bias_score > 0.6 else "Fair"
-        ats_flag  = "Low ATS"   if ats_score < 50   else "Good ATS"
-
-        # Reuse domain already detected inside ats_percentage_score — no extra LLM call
-        domain = ats_scores.get("Resume Domain", "Unknown")
-
-        # ✅ Store everything in session state
-        st.session_state.resume_data.append({
-            "Resume Name": uploaded_file.name,
-            "Candidate Name": candidate_name,
-            "ATS Report": ats_result,
-            "ATS Match %": ats_score,
-            "Formatted Score": formatted_score,
-            "Education Score": edu_score,
-            "Experience Score": exp_score,
-            "Skills Score": skills_score,
-            "Language Score": lang_score,
-            "Keyword Score": keyword_score,
-            "Format Score": ats_scores.get("Format Score", 0),
-            "Format Grade": ats_scores.get("Format Grade", "N/A"),
-            "Format Label": ats_scores.get("Format Label", ""),
-            "Format Issues": ats_scores.get("Format Issues", []),
-            "Format Passes": ats_scores.get("Format Passes", []),
-            "Education Analysis": ats_scores.get("Education Analysis", ""),
-            "Experience Analysis": ats_scores.get("Experience Analysis", ""),
-            "Skills Analysis": ats_scores.get("Skills Analysis", ""),
-            "Language Analysis": language_analysis_full,
-            "Keyword Analysis": ats_scores.get("Keyword Analysis", ""),
-            "Format Analysis": ats_scores.get("Format Analysis", ""),
-            "Final Thoughts": fit_summary,
-            "Missing Keywords": missing_keywords,
-            "Missing Skills": missing_skills,
-            "Bias Score (0 = Fair, 1 = Biased)": bias_score,
-            "Bias Status": bias_flag,
-            "Masculine Words": masc_count,
-            "Feminine Words": fem_count,
-            "Detected Masculine Words": detected_masc,
-            "Detected Feminine Words": detected_fem,
-            "Text Preview": full_text[:300] + "...",
-            "Highlighted Text": highlighted_text,
-            "Rewritten Text": rewritten_text,
-            "Optimized Resume Data": optimized_resume_data,
-            "Domain": domain,
-            "Domain Penalty": ats_scores.get("Domain Penalty", 0),
-            "Domain Similarity Score": ats_scores.get("Domain Similarity Score", 1.0),
-            "Resume Domain": ats_scores.get("Resume Domain", domain),
-            "Job Domain": ats_scores.get("Job Domain", "Unknown"),
-        })
-
-        insert_candidate(
-            (
-                uploaded_file.name,
-                candidate_name,
-                ats_score,
-                edu_score,
-                exp_score,
-                skills_score,
-                lang_score,
-                keyword_score,
-                bias_score,
-                fmt_score,   # ← format_score now saved to DB
-            ),
-            job_title=job_title,
-            job_description=job_description
-        )
-
-        st.session_state.processed_files.add(uploaded_file.name)
+        except Exception as _proc_err:
+            # ── Section 7: Error isolation ────────────────────────────────────
+            # One user's corrupt/unusual PDF cannot crash the entire Streamlit app.
+            # The error is shown only to that user; other sessions are unaffected.
+            st.error(
+                f"❌ Resume processing failed for **{uploaded_file.name}**. "
+                f"Please try re-uploading or use a different PDF. "
+                f"(Details: {_proc_err})"
+            )
+            scanner_placeholder.empty()
+            continue
 
         # ✅ IMPROVED: Smoother success animation with better transitions
         SUCCESS_HTML = """
