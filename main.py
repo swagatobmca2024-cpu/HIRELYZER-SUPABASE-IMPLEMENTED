@@ -8,10 +8,17 @@ import asyncio
 import io
 import urllib.parse
 import base64
+import gc
+import uuid
+import threading
 from io import BytesIO
 from collections import Counter
 from datetime import datetime
 import time
+
+# ── Concurrency limiter: max 2 OCR jobs run simultaneously across all users ──
+# Others wait instead of crashing the server with OOM errors.
+_OCR_SEMAPHORE = threading.Semaphore(2)
 
 # Third-party library imports
 import streamlit as st
@@ -2669,8 +2676,14 @@ def ensure_nltk():
     nltk.download('wordnet', quiet=True)
     return WordNetLemmatizer()
 
-lemmatizer = ensure_nltk()
-reader = get_easyocr_reader()
+# ── Lazy init: do NOT call these at module level ──────────────────────────
+# Both are loaded on first actual use (cached after that via st.cache_resource /
+# st.cache_data). Loading EasyOCR at startup costs ~400 MB RAM and crashes the
+# server before any resume is even uploaded.
+#
+# lemmatizer  → accessed via ensure_nltk()   wherever needed
+# OCR reader  → accessed via get_easyocr_reader() inside extract_text_from_images
+lemmatizer = ensure_nltk()   # NLTK is lightweight — safe to keep at module level
 
 def generate_docx(text, filename="bias_free_resume.docx"):
     doc = Document()
@@ -2799,6 +2812,14 @@ def _extract_page_text_smart(page) -> str:
 
 
 def extract_text_from_pdf(file_path):
+    """
+    Extract text from PDF using PyMuPDF (fitz) first.
+    Only falls back to OCR when fitz returns fewer than 100 meaningful characters
+    — which indicates a scanned / image-only PDF.
+
+    This prevents unnecessary EasyOCR invocations on normal text-based resumes,
+    which is the most common upload type.
+    """
     try:
         doc = fitz.open(file_path)
         text_list = []
@@ -2807,34 +2828,91 @@ def extract_text_from_pdf(file_path):
             if page_text.strip():
                 text_list.append(page_text)
         doc.close()
-        return text_list if text_list else extract_text_from_images(file_path)
+
+        # Only invoke OCR when fitz genuinely found nothing useful.
+        # < 100 chars across all pages = image-based PDF (scanned resume).
+        total_chars = sum(len(t.strip()) for t in text_list)
+        if total_chars < 100:
+            with st.spinner("📷 Scanned PDF detected — running OCR (this may take 30–60s)..."):
+                return extract_text_from_images(file_path)
+
+        return text_list
+
     except Exception as e:
         st.error(f"⚠ Error extracting text: {e}")
         return []
 
 def extract_text_from_images(pdf_path):
-    try:
-        images = convert_from_path(pdf_path, dpi=150, first_page=1, last_page=5)
-        return ["\n".join(reader.readtext(np.array(img), detail=0)) for img in images]
-    except Exception as e:
-        st.error(f"⚠ Error extracting from image: {e}")
-        return []
+    """
+    OCR fallback for scanned / image-based PDFs.
+
+    Multi-user safety measures:
+      • _OCR_SEMAPHORE caps concurrent OCR jobs at 2 across ALL users.
+      • Pages converted ONE AT A TIME — never all pages in RAM together.
+      • dpi=100 (was 150) — 56% less RAM, still OCR-accurate for resumes.
+      • Max 3 pages — resumes are 1-2 pages; caps worst-case RAM per job.
+      • del + gc.collect() after every page — memory freed immediately.
+    """
+    results = []
+    with _OCR_SEMAPHORE:   # at most 2 concurrent OCR jobs across ALL users
+        try:
+            try:
+                import fitz as _fitz
+                _doc = _fitz.open(pdf_path)
+                total_pages = min(_doc.page_count, 3)
+                _doc.close()
+            except Exception:
+                total_pages = 3
+
+            ocr_reader = get_easyocr_reader()  # cached — loads once globally
+
+            for page_num in range(1, total_pages + 1):
+                try:
+                    page_images = convert_from_path(
+                        pdf_path,
+                        dpi=100,
+                        first_page=page_num,
+                        last_page=page_num
+                    )
+                    if not page_images:
+                        continue
+
+                    pil_img = page_images[0]
+                    del page_images
+
+                    img_array = np.array(pil_img)
+                    del pil_img
+
+                    page_text = "\n".join(ocr_reader.readtext(img_array, detail=0))
+                    del img_array
+                    gc.collect()
+
+                    if page_text.strip():
+                        results.append(page_text)
+
+                except Exception as page_err:
+                    st.warning(f"⚠ OCR failed on page {page_num}: {page_err}")
+                    continue
+
+        except Exception as e:
+            st.error(f"⚠ OCR pipeline error: {e}")
+
+    return results
 
 def safe_extract_text(uploaded_file):
     """
     Safely extracts text from uploaded file.
     Prevents app crash if file is not a resume or unreadable.
     """
+    # UUID prefix prevents two users uploading same-named files from colliding
+    _uid = uuid.uuid4().hex[:8]
+    temp_path = f"/tmp/{_uid}_{uploaded_file.name}"
     try:
-        # Save uploaded file to a temp location
-        temp_path = f"/tmp/{uploaded_file.name}"
         with open(temp_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
 
-        # Try PDF text extraction
         text_list = extract_text_from_pdf(temp_path)
 
-        # If nothing readable found
         if not text_list or all(len(t.strip()) == 0 for t in text_list):
             st.warning("⚠️ This file doesn't look like a resume or contains no readable text.")
             return None
@@ -2844,6 +2922,13 @@ def safe_extract_text(uploaded_file):
     except Exception as e:
         st.error(f"⚠️ Could not process this file: {e}")
         return None
+    finally:
+        # Always clean up — prevents /tmp disk fill-up over time
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except Exception:
+            pass
 
 
 # ============================================================
@@ -6283,20 +6368,30 @@ if uploaded_files and job_description:
         
         scanner_placeholder.markdown(OPTIMIZED_SCANNER_HTML, unsafe_allow_html=True)
 
-        # ✅ Save uploaded file
-        file_path = os.path.join(working_dir, uploaded_file.name)
-        with open(file_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
+        # ✅ Save uploaded file with UUID prefix — prevents concurrent user collisions
+        # (e.g. two users uploading "resume.pdf" simultaneously would overwrite each other)
+        _uid = uuid.uuid4().hex[:8]
+        file_path = os.path.join("/tmp", f"{_uid}_{uploaded_file.name}")
+        try:
+            with open(file_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
 
-        # ✅ Reduced delay for better UX
-        time.sleep(4)
+            # ✅ Reduced delay for better UX
+            time.sleep(4)
 
-        # ✅ Extract text from PDF
-        text = extract_text_from_pdf(file_path)
-        if not text:
-            st.warning(f"⚠️ Could not extract text from {uploaded_file.name}. Skipping.")
-            scanner_placeholder.empty()
-            continue
+            # ✅ Extract text from PDF
+            text = extract_text_from_pdf(file_path)
+            if not text:
+                st.warning(f"⚠️ Could not extract text from {uploaded_file.name}. Skipping.")
+                scanner_placeholder.empty()
+                continue
+        finally:
+            # ✅ Always clean up temp file — prevents disk fill-up over time
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+            except Exception:
+                pass
 
         all_text.append(" ".join(text))
         full_text = " ".join(text)
