@@ -15371,8 +15371,8 @@ def _render_js_timer(remaining_seconds: float, total_seconds: int, submitted: bo
 
     The countdown runs entirely in the browser — no server round-trip per tick.
     When the countdown hits zero the JS clicks the hidden Streamlit button
-    a rerun beacon that calls window.parent.location.reload() when the
-    countdown hits zero → server-side _fresh_remaining <= 0 → auto-submits.
+    whose key is  '__timer_expired_btn_{q_idx}'  which triggers a normal
+    Streamlit interaction → sets session_state flags → auto-submits answer.
 
     Parameters
     ----------
@@ -15477,10 +15477,8 @@ def _render_js_timer(remaining_seconds: float, total_seconds: int, submitted: bo
 
         if (left <= 0 && !expired) {{
           expired = true;
-          // Timer display freezes at 00:00.
-          // Auto-submit is handled server-side: the beacon component below
-          // sends a postMessage → Streamlit reruns → _fresh_remaining <= 0
-          // fires the auto-submit. No button-clicking needed here.
+          // Display-only: freeze at 00:00.
+          // Auto-submit is handled entirely server-side via a background thread.
           display.textContent = '00:00';
           bar.style.width = '100%';
           bar.style.background = '#ef4444';
@@ -20119,39 +20117,43 @@ Generate {num_questions} questions now:
                     </div>
                     """, unsafe_allow_html=True)
 
-                    # ── Rerun beacon: triggers auto-submit when timer expires ─────
-                    # The __TIMER_EXPIRED__ button + JS-click approach is removed.
-                    # It never worked because st.components iframes are sandboxed —
-                    # window.parent.document access is blocked cross-origin.
+                    # ── Background-thread rerun trigger ──────────────────────────
+                    # All JS-based approaches (button click, postMessage, location.reload)
+                    # fail because st.components iframes are cross-origin sandboxed, and
+                    # location.reload() navigates away from the app entirely.
                     #
-                    # New approach (no extra packages needed):
-                    #   1. Inject a beacon component with setTimeout(remaining_ms).
-                    #   2. When it fires, call window.parent.location.reload() which
-                    #      forces a full Streamlit page rerun.
-                    #   3. On that rerun, _fresh_remaining <= 0 → auto-submit fires.
-                    #
-                    # window.parent.location (not .document) IS accessible cross-origin
-                    # for same-site iframes (Streamlit components qualify).
-                    if not _submitted_now and remaining_time > 0:
-                        _beacon_ms = int(remaining_time * 1000) + 800  # 0.8s buffer
-                        st.components.v1.html(
-                            f"""<script>
-                            (function() {{
-                              if (window._beaconArmed) return;
-                              window._beaconArmed = true;
-                              setTimeout(function() {{
-                                try {{
-                                  window.parent.location.reload();
-                                }} catch(e) {{
-                                  // Last-resort fallback: reload this frame,
-                                  // which also triggers a Streamlit rerun.
-                                  window.location.reload();
-                                }}
-                              }}, {_beacon_ms});
-                            }})();
-                            </script>""",
-                            height=0,
+                    # Solution: spawn a daemon thread that sleeps until remaining_time,
+                    # then sets _timer_expired in session_state and calls st.rerun()
+                    # via Streamlit's runtime API. This is 100% server-side — no JS needed.
+                    # The thread is keyed to (_q_idx_now, question_timer_start) so it
+                    # spawns only once per question, not on every rerun.
+                    _thread_key = f"_timer_thread_armed_{_q_idx_now}"
+                    if (not _submitted_now
+                            and remaining_time > 0
+                            and not st.session_state.get(_thread_key, False)):
+                        st.session_state[_thread_key] = True
+
+                        def _expire_timer(sleep_secs, session_id):
+                            import time as _t
+                            _t.sleep(sleep_secs)
+                            try:
+                                from streamlit.runtime import get_instance
+                                from streamlit.runtime.scriptrunner import add_script_run_ctx
+                                runtime = get_instance()
+                                session_info = runtime._session_mgr.get_session_info(session_id)
+                                if session_info is not None:
+                                    session_info.session.request_rerun(None)
+                            except Exception:
+                                pass  # session may have ended; silently ignore
+
+                        import threading as _threading
+                        _sid = st.runtime.scriptrunner.get_script_run_ctx().session_id
+                        _t = _threading.Thread(
+                            target=_expire_timer,
+                            args=(remaining_time + 0.5, _sid),
+                            daemon=True,
                         )
+                        _t.start()
 
 
                     # Refresh button — always visible, right-aligned, small
@@ -20193,7 +20195,10 @@ Generate {num_questions} questions now:
                         st.session_state.current_interview_id = None
                         st.session_state.question_db_ids = []
                         st.session_state.pop("_timer_expired", None)
-                        st.session_state.pop("_timer_expired_answer", None)  # FIX 9b
+                        st.session_state.pop("_timer_expired_answer", None)
+                        # Clear all thread-armed flags on full refresh
+                        for _k in [k for k in st.session_state if k.startswith("_timer_thread_armed_")]:
+                            st.session_state.pop(_k, None)
                         st.rerun()
 
                     # Answer input with character limit
@@ -20303,13 +20308,12 @@ Generate {num_questions} questions now:
                     if 'pending_followup_strategy' not in st.session_state:
                         st.session_state.pending_followup_strategy = ""
 
-                    # ── Auto-submit: fires on the beacon-triggered rerun ───────────
-                    # Pure server-side check — no JS flags. On every rerun we
-                    # recompute elapsed time; when _fresh_remaining hits 0 (because
-                    # the beacon fired window.parent.location.reload()), this fires.
-                    # Guard with dynamic_answer_submitted to prevent double-submission.
-                    st.session_state.pop("_timer_expired", None)        # clean up legacy key
-                    st.session_state.pop("_timer_expired_answer", None) # clean up legacy key
+                    # ── Auto-submit: fires on the thread-triggered rerun ──────────
+                    # When the background thread calls session.request_rerun(), this
+                    # block runs and _fresh_remaining is <= 0 → auto-submit fires.
+                    # Legacy _timer_expired keys cleaned up for safety.
+                    st.session_state.pop("_timer_expired", None)
+                    st.session_state.pop("_timer_expired_answer", None)
                     _fresh_elapsed   = time.time() - st.session_state.question_timer_start if st.session_state.question_timer_start else 0
                     _fresh_remaining = max(0, st.session_state.timer_seconds - _fresh_elapsed)
                     if _fresh_remaining <= 0 and not st.session_state.dynamic_answer_submitted:
@@ -20409,8 +20413,11 @@ Generate {num_questions} questions now:
                                 st.session_state.dynamic_answer_submitted = False
                                 st.session_state.pending_followup_display = ""
                                 st.session_state.pending_followup_strategy = ""
-                                st.session_state.pop("_timer_expired", None)       # clear so next Q starts clean
-                                st.session_state.pop("_timer_expired_answer", None)  # FIX 9: clear snapshotted answer
+                                st.session_state.pop("_timer_expired", None)
+                                st.session_state.pop("_timer_expired_answer", None)
+                                # Clear the thread-armed flag so a new thread spawns for next question
+                                _prev_idx = st.session_state.current_dynamic_interview_question - 1
+                                st.session_state.pop(f"_timer_thread_armed_{_prev_idx}", None)
                                 if st.session_state.current_dynamic_interview_question < len(st.session_state.dynamic_interview_questions):
                                     st.session_state.current_interview_question_text = st.session_state.dynamic_interview_questions[st.session_state.current_dynamic_interview_question]
                                 else:
@@ -20451,7 +20458,7 @@ Generate {num_questions} questions now:
                     # NOTE: No more time.sleep(1) + st.rerun() here.
                     # The JS timer inside the components.html block above handles
                     # the visual countdown entirely in the browser. Auto-submit
-                    # is triggered by the beacon reload → server-side _fresh_remaining check.
+                    # is triggered by the hidden __TIMER_EXPIRED__ button click.
                 else:
                     # FIX 6 (fallback): early guard above handles this; this is a safety net
                     if not st.session_state.dynamic_interview_completed:
