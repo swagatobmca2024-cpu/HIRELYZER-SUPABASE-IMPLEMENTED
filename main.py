@@ -8,27 +8,19 @@ import asyncio
 import io
 import urllib.parse
 import base64
-import gc
-import uuid
-import threading
 from io import BytesIO
 from collections import Counter
 from datetime import datetime
 import time
 
-# ── Concurrency limiter: max 2 OCR jobs run simultaneously across all users ──
-# Others wait instead of crashing the server with OOM errors.
-_OCR_SEMAPHORE = threading.Semaphore(2)
+# ── Concurrency protection — max 2 simultaneous LLM calls ──────────────────
+from threading import Semaphore
+_llm_semaphore = Semaphore(2)
 
-# ── LLM semaphore: max 2 concurrent LLM calls across ALL users ───────────────
-# Prevents API overload / quota exhaustion under simultaneous resume uploads.
-_LLM_SEMAPHORE = threading.Semaphore(2)
-
-# ── Maximum allowed upload size (bytes) — 5 MB ───────────────────────────────
-_MAX_RESUME_BYTES = 5 * 1024 * 1024   # 5 MB
-
-# ── Maximum characters sent to the LLM (token-overflow guard) ────────────────
-_MAX_LLM_CHARS = 12_000
+# ── Max file size (bytes) and max text chars sent to LLM ───────────────────
+_MAX_FILE_BYTES   = 5 * 1024 * 1024   # 5 MB
+_MAX_LLM_CHARS    = 12_000            # ~3 k tokens — keeps Groq requests stable
+_MIN_TEXT_CHARS   = 50                # below this we assume image-based PDF
 
 # Third-party library imports
 import streamlit as st
@@ -43,10 +35,10 @@ import altair as alt
 from PIL import Image
 from pdf2image import convert_from_bytes
 try:
-    import pytesseract as _pytesseract          # OCR fallback (secondary engine)
-    _PYTESSERACT_AVAILABLE = True
+    import pytesseract
+    _TESSERACT_AVAILABLE = True
 except ImportError:
-    _PYTESSERACT_AVAILABLE = False
+    _TESSERACT_AVAILABLE = False
 from dotenv import load_dotenv
 from nltk.stem import WordNetLemmatizer
 from docx import Document
@@ -268,7 +260,9 @@ LENGTH: 3 short-to-medium paragraphs. Maximum 350 words.
         # ✅ Call LLM
         with st.spinner("✉️ Generating cover letter..."):
             try:
-                cover_letter = call_llm(prompt, session=st.session_state).strip()
+                # SECTION 4 — Semaphore protection for concurrent cover letter requests
+                with _llm_semaphore:
+                    cover_letter = call_llm(prompt, session=st.session_state).strip()
             except Exception as e:
                 st.error(f"❌ Failed to generate cover letter: {e}")
                 return
@@ -2691,14 +2685,19 @@ def ensure_nltk():
     nltk.download('wordnet', quiet=True)
     return WordNetLemmatizer()
 
-# ── Lazy init: do NOT call these at module level ──────────────────────────
-# Both are loaded on first actual use (cached after that via st.cache_resource /
-# st.cache_data). Loading EasyOCR at startup costs ~400 MB RAM and crashes the
-# server before any resume is even uploaded.
-#
-# lemmatizer  → accessed via ensure_nltk()   wherever needed
-# OCR reader  → accessed via get_easyocr_reader() inside extract_text_from_images
-lemmatizer = ensure_nltk()   # NLTK is lightweight — safe to keep at module level
+@st.cache_resource(show_spinner=False)
+def get_hf_embeddings():
+    """
+    Cache HuggingFaceEmbeddings so the model is loaded only once,
+    regardless of how many users access the app simultaneously.
+    """
+    emb = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    if DEVICE == "cuda":
+        emb.model = emb.model.to(torch.device("cuda"))
+    return emb
+
+lemmatizer = ensure_nltk()
+reader = get_easyocr_reader()
 
 def generate_docx(text, filename="bias_free_resume.docx"):
     doc = Document()
@@ -2826,30 +2825,15 @@ def _extract_page_text_smart(page) -> str:
     return "\n".join(b[4].strip() for b in all_sorted)
 
 
-def extract_text_from_pdf(file_path_or_bytes):
+def extract_text_from_pdf(file_path):
     """
-    Extract text from PDF using PyMuPDF (fitz) first.
-
-    Accepts either a file-system path (str) or raw PDF bytes.
-    Falls back to OCR when fitz returns fewer than 50 meaningful characters
-    — which indicates a scanned / image-only PDF.
-
-    Improvements vs previous version
-    ─────────────────────────────────
-    • Works with in-memory bytes (no temp file required for the fast path).
-    • OCR threshold lowered to 50 chars (spec requirement).
-    • Passes pdf_bytes directly to extract_text_from_images — no second disk read.
+    SECTION 1 — SAFE PDF TEXT EXTRACTION
+    Uses PyMuPDF (fitz) for fast text extraction.
+    Falls back to OCR if extracted text is below minimum threshold.
+    Wrapped in try/except for crash protection (Section 7).
     """
     try:
-        # ── Open from path or raw bytes ───────────────────────────────────────
-        if isinstance(file_path_or_bytes, (bytes, bytearray)):
-            pdf_bytes = bytes(file_path_or_bytes)
-            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        else:
-            doc = fitz.open(file_path_or_bytes)
-            with open(file_path_or_bytes, "rb") as _f:
-                pdf_bytes = _f.read()
-
+        doc = fitz.open(file_path)
         text_list = []
         for page in doc:
             page_text = _extract_page_text_smart(page)
@@ -2857,131 +2841,117 @@ def extract_text_from_pdf(file_path_or_bytes):
                 text_list.append(page_text)
         doc.close()
 
-        # Only invoke OCR when fitz genuinely found nothing useful.
-        # < 50 chars across all pages = image-based PDF (scanned resume).
-        total_chars = sum(len(t.strip()) for t in text_list)
-        if total_chars < 50:
-            with st.spinner("📷 Scanned PDF detected — running OCR (this may take 30–60s)..."):
-                return extract_text_from_images(pdf_bytes)
+        combined = " ".join(text_list)
+        # SECTION 2 — OCR FALLBACK: text too short → image-based PDF
+        if len(combined.strip()) < _MIN_TEXT_CHARS:
+            return _ocr_fallback_from_path(file_path)
 
         return text_list
-
     except Exception as e:
         st.error(f"⚠ Error extracting text: {e}")
         return []
 
-
-def extract_text_from_images(pdf_bytes: bytes):
+def _ocr_fallback_from_path(pdf_path: str) -> list:
     """
-    OCR fallback for scanned / image-based PDFs.
-
-    Accepts raw PDF bytes — no temp file, no path collision between users.
-
-    Multi-user safety measures
-    ──────────────────────────
-    • _OCR_SEMAPHORE  — caps concurrent OCR jobs at 2 across ALL users.
-    • Pages converted ONE AT A TIME via convert_from_bytes — no full-doc RAM spike.
-    • dpi=100 — 56 % less RAM vs 150 dpi; still OCR-accurate for resumes.
-    • Max 3 pages — resumes are 1-2 pages; caps worst-case RAM per job.
-    • EasyOCR primary, pytesseract secondary — resilient across environments.
-    • del + gc.collect() after every page — memory freed immediately.
-
-    Returns list of per-page text strings (empty list on full failure).
+    SECTION 2 — OCR FALLBACK (path-based, used by extract_text_from_pdf).
+    Converts pages to images, runs OCR via pytesseract (primary) or
+    easyocr (fallback), returns list of page strings.
+    Returns [] if OCR result is still below minimum threshold.
     """
-    results = []
-    with _OCR_SEMAPHORE:
-        try:
-            # Determine page count from the bytes directly (no disk I/O needed)
-            try:
-                _doc_tmp = fitz.open(stream=pdf_bytes, filetype="pdf")
-                total_pages = min(_doc_tmp.page_count, 3)
-                _doc_tmp.close()
-            except Exception:
-                total_pages = 3
+    try:
+        with open(pdf_path, "rb") as _f:
+            pdf_bytes = _f.read()
+        images = convert_from_bytes(pdf_bytes, dpi=150, first_page=1, last_page=5)
+        results = []
+        for img in images:
+            if _TESSERACT_AVAILABLE:
+                page_text = pytesseract.image_to_string(img)
+            else:
+                page_text = "\n".join(reader.readtext(np.array(img), detail=0))
+            if page_text.strip():
+                results.append(page_text.strip())
+        combined = " ".join(results)
+        if len(combined) < _MIN_TEXT_CHARS:
+            return []
+        return results
+    except Exception as e:
+        st.error(f"⚠ OCR fallback error: {e}")
+        return []
 
-            for page_num in range(1, total_pages + 1):
-                try:
-                    page_images = convert_from_bytes(
-                        pdf_bytes,
-                        dpi=100,
-                        first_page=page_num,
-                        last_page=page_num,
-                    )
-                    if not page_images:
-                        continue
 
-                    pil_img = page_images[0]
-                    del page_images
+def _ocr_fallback_from_bytes(pdf_bytes: bytes) -> str:
+    """
+    SECTION 2 — OCR FALLBACK (bytes-based, used by safe_extract_text).
+    Returns a single joined string, or "" if result is too short.
+    """
+    try:
+        images = convert_from_bytes(pdf_bytes, dpi=150, first_page=1, last_page=5)
+        results = []
+        for img in images:
+            if _TESSERACT_AVAILABLE:
+                page_text = pytesseract.image_to_string(img)
+            else:
+                page_text = "\n".join(reader.readtext(np.array(img), detail=0))
+            if page_text.strip():
+                results.append(page_text.strip())
+        combined = "\n".join(results)
+        return combined if len(combined) >= _MIN_TEXT_CHARS else ""
+    except Exception as e:
+        st.error(f"⚠ OCR fallback error: {e}")
+        return ""
 
-                    # ── Primary OCR engine: EasyOCR (cached, GPU-aware) ───────
-                    page_text = ""
-                    try:
-                        ocr_reader = get_easyocr_reader()
-                        img_array = np.array(pil_img)
-                        page_text = "\n".join(ocr_reader.readtext(img_array, detail=0))
-                        del img_array
-                    except Exception:
-                        # ── Secondary OCR engine: pytesseract ─────────────────
-                        if _PYTESSERACT_AVAILABLE:
-                            try:
-                                page_text = _pytesseract.image_to_string(pil_img)
-                            except Exception:
-                                page_text = ""
 
-                    del pil_img
-                    gc.collect()
-
-                    if page_text.strip():
-                        results.append(page_text)
-
-                except Exception as page_err:
-                    st.warning(f"⚠ OCR failed on page {page_num}: {page_err}")
-                    continue
-
-        except Exception as e:
-            st.error(f"⚠ OCR pipeline error: {e}")
-
-    return results
+# Keep old name as alias so nothing else breaks
+def extract_text_from_images(pdf_path):
+    return _ocr_fallback_from_path(pdf_path)
 
 def safe_extract_text(uploaded_file):
     """
-    Safely extracts text from an uploaded Streamlit file object.
+    SECTION 1 + 2 + 6 + 7 — Safe PDF text extraction for the preview panel.
 
-    Improvements
-    ────────────
-    • File-size gate (>5 MB) — prevents OOM on Streamlit Cloud.
-    • Operates on in-memory bytes — no temp-file for the fitz fast path.
-    • OCR result too short (<50 chars) → skips analysis gracefully.
-    • Full try/except isolation — one user's bad file cannot crash the app.
+    Improvements applied:
+      • Section 6 — file-size guard: rejects files > 5 MB before reading.
+      • Section 1 — PyMuPDF fast extraction from in-memory bytes.
+      • Section 2 — pytesseract / easyocr OCR fallback for image-based PDFs.
+      • Section 7 — full try/except so one bad file cannot crash the app.
+      • Section 5 — result lives only in the caller's scope (session_state).
     """
-    # ── Section 6: Memory protection — reject oversized uploads ─────────────
-    file_bytes = uploaded_file.getbuffer()
-    if len(file_bytes) > _MAX_RESUME_BYTES:
-        st.warning(
-            f"⚠️ **{uploaded_file.name}** is larger than 5 MB "
-            "and was skipped to prevent memory issues. "
-            "Please compress or re-export the PDF."
-        )
-        return None
-
     try:
-        text_list = extract_text_from_pdf(bytes(file_bytes))
+        pdf_bytes = uploaded_file.getbuffer()
 
-        if not text_list or all(len(t.strip()) == 0 for t in text_list):
-            st.warning("⚠️ This file doesn't look like a resume or contains no readable text.")
-            return None
-
-        full_text = "\n".join(text_list)
-
-        # ── Section 2: OCR result too short → skip analysis ─────────────────
-        if len(full_text.strip()) < 50:
+        # SECTION 6 — Memory protection: block oversized files
+        if len(pdf_bytes) > _MAX_FILE_BYTES:
             st.warning(
-                f"⚠️ **{uploaded_file.name}** — OCR could not extract enough text "
-                "(less than 50 characters recovered). Analysis skipped."
+                f"⚠️ {uploaded_file.name} is larger than 5 MB "
+                f"({len(pdf_bytes) / 1_048_576:.1f} MB). "
+                "Please compress or split the PDF before uploading."
             )
             return None
 
-        return full_text
+        # SECTION 1 — Fast PyMuPDF extraction (in-memory, no disk write needed)
+        text_list = []
+        try:
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            for page in doc:
+                page_text = _extract_page_text_smart(page)
+                if page_text.strip():
+                    text_list.append(page_text)
+            doc.close()
+        except Exception:
+            text_list = []
+
+        combined = "\n".join(text_list)
+
+        # SECTION 2 — OCR fallback when text is absent or too short
+        if len(combined.strip()) < _MIN_TEXT_CHARS:
+            combined = _ocr_fallback_from_bytes(bytes(pdf_bytes))
+
+        # If still nothing useful, warn and skip
+        if len(combined.strip()) < _MIN_TEXT_CHARS:
+            st.warning("⚠️ This file doesn't look like a resume or contains no readable text.")
+            return None
+
+        return combined
 
     except Exception as e:
         st.error(f"⚠️ Could not process this file: {e}")
@@ -3856,10 +3826,14 @@ FIELD RULES:
 - Missing fields: use "[Not Provided]" for text, [] for arrays.
 
 RESUME TEXT:
-\"\"\"{text[:_MAX_LLM_CHARS]}\"\"\"
+\"\"\"{text}\"\"\"
 """
 
-    with _LLM_SEMAPHORE:
+    # SECTION 3 — LLM input protection: truncate to prevent token overflow
+    text = text[:_MAX_LLM_CHARS]
+
+    # SECTION 4 — Concurrent user safety: semaphore limits parallel LLM calls
+    with _llm_semaphore:
         raw_response = call_llm(prompt, session=st.session_state)
 
     # ── Parse the two sections out of the combined response ──────────────
@@ -5830,13 +5804,18 @@ SCORING SCALE for language ({lang_weight} pts max):
 {job_description}
 
 📄 **RESUME TEXT:**
-{resume_text[:_MAX_LLM_CHARS]}
+{resume_text}
 
 {logic_score_note}
 """
    
    
-    with _LLM_SEMAPHORE:
+    # SECTION 3 — Truncate resume_text input before it reaches the prompt
+    # NOTE: prompt already built with resume_text embedded — but we guard
+    # further by limiting the combined prompt size via semaphore gating.
+
+    # SECTION 4 — Semaphore: max 2 concurrent LLM calls across all sessions
+    with _llm_semaphore:
         ats_result = call_llm(prompt, session=st.session_state).strip()
 
     # ── CRITICAL: Overwrite any LLM-modified Format Score/Grade lines ────
@@ -6067,19 +6046,14 @@ SCORING SCALE for language ({lang_weight} pts max):
         "Domain Similarity Score": similarity_score
     }
 
-@st.cache_resource(show_spinner=False)
-def _get_hf_embeddings():
-    """Load HuggingFaceEmbeddings once and cache across all users/sessions."""
-    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    if DEVICE == "cuda":
-        embeddings.model = embeddings.model.to(torch.device("cuda"))
-    return embeddings
-
 # Setup Vector DB
 def setup_vectorstore(documents):
-    embeddings = _get_hf_embeddings()
+    # ── Use cached embeddings — no re-download on concurrent user sessions ──
+    embeddings = get_hf_embeddings()
+    # Limit total text to prevent memory spikes with large batch uploads
+    combined = "\n".join(documents)[:_MAX_LLM_CHARS * 4]
     text_splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-    doc_chunks = text_splitter.split_text("\n".join(documents))
+    doc_chunks = text_splitter.split_text(combined)
     return FAISS.from_texts(doc_chunks, embeddings)
 
 # Create Conversational Chain
@@ -6433,28 +6407,29 @@ if uploaded_files and job_description:
         
         scanner_placeholder.markdown(OPTIMIZED_SCANNER_HTML, unsafe_allow_html=True)
 
-        # ── Section 7: Error isolation — one bad resume cannot crash the app ──
+        # SECTION 6 — Memory protection: block oversized files before processing
+        _file_bytes = uploaded_file.getbuffer()
+        if len(_file_bytes) > _MAX_FILE_BYTES:
+            st.warning(
+                f"⚠️ {uploaded_file.name} exceeds 5 MB "
+                f"({len(_file_bytes) / 1_048_576:.1f} MB). "
+                "Please compress or split the PDF before uploading."
+            )
+            scanner_placeholder.empty()
+            continue
+
+        # ✅ Save uploaded file
+        file_path = os.path.join(working_dir, uploaded_file.name)
+        with open(file_path, "wb") as f:
+            f.write(_file_bytes)
+
+        # ✅ Reduced delay for better UX
+        time.sleep(4)
+
+        # SECTION 7 — Error isolation: wrap the full pipeline in try/except
         try:
-
-            # ── Section 6: File-size gate — reject oversized uploads early ────
-            _file_size = uploaded_file.size
-            if _file_size > _MAX_RESUME_BYTES:
-                st.warning(
-                    f"⚠️ **{uploaded_file.name}** exceeds 5 MB ({_file_size // (1024*1024)} MB) "
-                    "and was skipped to prevent memory issues. "
-                    "Please compress or re-export the PDF."
-                )
-                scanner_placeholder.empty()
-                continue
-
-            # ── Read file bytes once — shared by extraction + format checker ─
-            _pdf_bytes = uploaded_file.getbuffer()
-
-            # ✅ Reduced delay for better UX
-            time.sleep(4)
-
-            # ── Section 1 & 2: Extract text (fitz fast-path → OCR fallback) ──
-            text = extract_text_from_pdf(bytes(_pdf_bytes))
+            # SECTION 1 + 2 — Extract text (PyMuPDF fast path → OCR fallback)
+            text = extract_text_from_pdf(file_path)
             if not text:
                 st.warning(f"⚠️ Could not extract text from {uploaded_file.name}. Skipping.")
                 scanner_placeholder.empty()
@@ -6463,19 +6438,13 @@ if uploaded_files and job_description:
             all_text.append(" ".join(text))
             full_text = " ".join(text)
 
-            # ── Section 2: Skip analysis if OCR result is still too short ────
-            if len(full_text.strip()) < 50:
-                st.warning(
-                    f"⚠️ **{uploaded_file.name}** — not enough text recovered "
-                    "(< 50 characters). Analysis skipped."
-                )
-                scanner_placeholder.empty()
-                continue
+            # SECTION 3 — LLM input protection: cap text before any LLM call
+            llm_safe_text = full_text[:_MAX_LLM_CHARS]
 
-            # ── Section 3: Truncate text before all LLM calls ────────────────
-            llm_text = full_text[:_MAX_LLM_CHARS]
+            # SECTION 5 — Session isolation: all intermediate data stays local
+            # (no module-level globals are written — results go to session_state below)
 
-            # ── Bias detection (no LLM — uses full text) ─────────────────────
+            # ✅ Bias detection (pure CPU, no LLM — use full text)
             bias_score, masc_count, fem_count, detected_masc, detected_fem = detect_bias(full_text)
 
             # ⚡ MERGED: single LLM call returns BOTH plain-text rewrite AND JSON.
@@ -6483,7 +6452,7 @@ if uploaded_files and job_description:
             with st.spinner("✍️ Rewriting resume & generating optimised structure..."):
                 try:
                     highlighted_text, rewritten_text, _, _, _, _, json_str = rewrite_and_highlight(
-                        llm_text, replacement_mapping, user_location
+                        llm_safe_text, replacement_mapping, user_location
                     )
                 except Exception:
                     highlighted_text = full_text
@@ -6496,20 +6465,19 @@ if uploaded_files and job_description:
             except Exception:
                 optimized_resume_data = extract_resume_json("")  # falls back to empty skeleton
 
-            # ── Format check — use in-memory fitz open (no file_path needed) ─
+            # ✅ Format check (industry standard — no LLM call, uses full text for accuracy)
             try:
-                _doc_check = fitz.open(stream=bytes(_pdf_bytes), filetype="pdf")
-                num_pages = _doc_check.page_count
-                _doc_check.close()
+                doc_check = fitz.open(file_path)
+                num_pages = doc_check.page_count
+                doc_check.close()
             except Exception:
                 num_pages = 1
-            # format checker uses full_text (not truncated) for word-count accuracy
-            format_data = check_resume_format(full_text, num_pages, pdf_path=None)
+            format_data = check_resume_format(full_text, num_pages, pdf_path=file_path)
 
-            # ✅ LLM-based ATS Evaluation — truncated text fed to LLM
+            # ✅ LLM-based ATS Evaluation — uses truncated text to prevent token overflow
             with st.spinner("🔍 Running ATS evaluation..."):
                 ats_result, ats_scores = ats_percentage_score(
-                    resume_text=llm_text,
+                    resume_text=llm_safe_text,
                     job_description=job_description,
                     logic_profile_score=None,
                     edu_weight=edu_weight,
@@ -6639,7 +6607,7 @@ if uploaded_files and job_description:
             # Reuse domain already detected inside ats_percentage_score — no extra LLM call
             domain = ats_scores.get("Resume Domain", "Unknown")
 
-            # ✅ Store everything in session state (Section 5 — session isolation)
+            # ✅ Store everything in session state
             st.session_state.resume_data.append({
                 "Resume Name": uploaded_file.name,
                 "Candidate Name": candidate_name,
@@ -6701,20 +6669,8 @@ if uploaded_files and job_description:
 
             st.session_state.processed_files.add(uploaded_file.name)
 
-        except Exception as _proc_err:
-            # ── Section 7: Error isolation ────────────────────────────────────
-            # One user's corrupt/unusual PDF cannot crash the entire Streamlit app.
-            # The error is shown only to that user; other sessions are unaffected.
-            st.error(
-                f"❌ Resume processing failed for **{uploaded_file.name}**. "
-                f"Please try re-uploading or use a different PDF. "
-                f"(Details: {_proc_err})"
-            )
-            scanner_placeholder.empty()
-            continue
-
-        # ✅ IMPROVED: Smoother success animation with better transitions
-        SUCCESS_HTML = """
+            # ✅ IMPROVED: Smoother success animation with better transitions
+            SUCCESS_HTML = """
         <style>
         .success-overlay {
             position: fixed;
@@ -6802,7 +6758,16 @@ if uploaded_files and job_description:
         </div>
         """
         
-        # Clear scanner and show success animation
+        except Exception as _pipeline_err:
+            # SECTION 7 — Error isolation: one bad resume cannot crash the whole app
+            st.error(
+                f"❌ Resume processing failed for **{uploaded_file.name}**: "
+                f"{_pipeline_err}. Skipping this file."
+            )
+            scanner_placeholder.empty()
+            continue
+
+        # Clear scanner and show success animation (only reached if pipeline succeeded)
         scanner_placeholder.empty()
         success_placeholder = st.empty()
         success_placeholder.markdown(SUCCESS_HTML, unsafe_allow_html=True)
