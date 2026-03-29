@@ -15367,19 +15367,16 @@ import json
 
 def _render_js_timer(remaining_seconds: float, total_seconds: int, submitted: bool, q_idx: int):
     """
-    Render a pure-JS countdown timer inside an st.components.v1.html block.
+    Render a pure-JS countdown timer using st.markdown (NOT st.components.v1.html).
 
-    The countdown runs entirely in the browser — no server round-trip per tick.
-    When the countdown hits zero the JS clicks the hidden Streamlit button
-    whose key is  '__timer_expired_btn_{q_idx}'  which triggers a normal
-    Streamlit interaction → sets session_state flags → auto-submits answer.
+    CRITICAL: st.components.v1.html renders inside a sandboxed iframe which
+    blocks window.parent access — so JS could never click the Streamlit button
+    in the parent page. st.markdown injects directly into the main page DOM,
+    giving JS full unrestricted access to all buttons on the page.
 
-    Parameters
-    ----------
-    remaining_seconds : float   Seconds left as calculated by the server on this render.
-    total_seconds     : int     Total seconds for this question (for the progress bar).
-    submitted         : bool    If True, show "Answer Submitted" banner instead.
-    q_idx             : int     Current question index (used to key the hidden button).
+    When countdown hits zero, JS finds the hidden "__TIMER_EXPIRED__" button
+    by its text content and clicks it → Streamlit receives click → st.rerun()
+    → auto-submit block fires.
     """
     if submitted:
         st.markdown("""
@@ -15393,69 +15390,66 @@ def _render_js_timer(remaining_seconds: float, total_seconds: int, submitted: bo
         """, unsafe_allow_html=True)
         return
 
-    # Clamp so we never pass a negative value into JS
     remaining_seconds = max(0.0, remaining_seconds)
 
-    st.components.v1.html(f"""
+    # Use a unique DOM id per question so multiple reruns don't collide
+    timer_dom_id = f"t4timer_{q_idx}"
+
+    st.markdown(f"""
     <style>
       @keyframes t4pulse {{
         0%,100% {{ box-shadow: 0 0 0 0 rgba(244,67,54,0.0); }}
         50%      {{ box-shadow: 0 0 0 6px rgba(244,67,54,0.18); }}
       }}
-      #timer-wrap {{
+      #{timer_dom_id}_wrap {{
         font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
         border-radius: 12px;
         padding: 14px;
         text-align: center;
         transition: background 0.5s, border-color 0.5s;
-      }}
-      #timer-wrap.normal {{
         background: linear-gradient(135deg,rgba(251,191,36,0.08),rgba(251,191,36,0.04));
         border: 1px solid rgba(251,191,36,0.25);
       }}
-      #timer-wrap.urgent {{
-        background: linear-gradient(135deg,rgba(244,67,54,0.12),rgba(244,67,54,0.06));
-        border: 1px solid rgba(244,67,54,0.45);
+      #{timer_dom_id}_wrap.urgent {{
+        background: linear-gradient(135deg,rgba(244,67,54,0.12),rgba(244,67,54,0.06)) !important;
+        border: 1px solid rgba(244,67,54,0.45) !important;
         animation: t4pulse 1s ease-in-out infinite;
       }}
-      #timer-text {{
-        font-size: 1.4rem;
-        font-weight: 700;
-        letter-spacing: -0.01em;
-        transition: color 0.5s;
+      #{timer_dom_id}_text {{
+        font-size: 1.4rem; font-weight: 700; letter-spacing: -0.01em;
+        color: #fbbf24; transition: color 0.5s;
       }}
-      #timer-track {{
-        width: 100%; height: 4px;
-        background: rgba(255,255,255,0.08);
-        border-radius: 99px;
-        margin-top: 10px;
-        overflow: hidden;
+      #{timer_dom_id}_track {{
+        width: 100%; height: 4px; background: rgba(255,255,255,0.08);
+        border-radius: 99px; margin-top: 10px; overflow: hidden;
       }}
-      #timer-bar {{
-        height: 100%;
-        border-radius: 99px;
+      #{timer_dom_id}_bar {{
+        height: 100%; border-radius: 99px;
+        background: #f59e0b;
         transition: width 0.95s linear, background 0.5s;
       }}
     </style>
 
-    <div id="timer-wrap" class="normal">
-      <div id="timer-text">⏰ Time Remaining: <span id="timer-display">--:--</span></div>
-      <div id="timer-track"><div id="timer-bar"></div></div>
+    <div id="{timer_dom_id}_wrap">
+      <div id="{timer_dom_id}_text">⏰ Time Remaining: <span id="{timer_dom_id}_display">--:--</span></div>
+      <div id="{timer_dom_id}_track"><div id="{timer_dom_id}_bar" style="width:0%"></div></div>
     </div>
 
     <script>
     (function() {{
-      // Server told us exactly how many seconds remain at render time.
-      // Use performance.now() for drift-free sub-millisecond accuracy in browser.
-      var remaining  = {remaining_seconds:.3f};
-      var total      = {total_seconds};
-      var startedAt  = performance.now();
-      var expired    = false;
+      // Guard: if this timer instance is already running (rerun without question change), skip.
+      if (window['_{timer_dom_id}_running']) return;
+      window['_{timer_dom_id}_running'] = true;
 
-      var wrap    = document.getElementById('timer-wrap');
-      var display = document.getElementById('timer-display');
-      var bar     = document.getElementById('timer-bar');
-      var text    = document.getElementById('timer-text');
+      var remaining = {remaining_seconds:.3f};
+      var total     = {total_seconds};
+      var startedAt = performance.now();
+      var expired   = false;
+
+      var wrap    = document.getElementById('{timer_dom_id}_wrap');
+      var display = document.getElementById('{timer_dom_id}_display');
+      var bar     = document.getElementById('{timer_dom_id}_bar');
+      var text    = document.getElementById('{timer_dom_id}_text');
 
       function fmt(secs) {{
         var m = Math.floor(secs / 60);
@@ -15464,41 +15458,53 @@ def _render_js_timer(remaining_seconds: float, total_seconds: int, submitted: bo
       }}
 
       function tick() {{
+        // Re-fetch elements each tick in case Streamlit re-rendered the DOM
+        wrap    = document.getElementById('{timer_dom_id}_wrap');
+        display = document.getElementById('{timer_dom_id}_display');
+        bar     = document.getElementById('{timer_dom_id}_bar');
+        text    = document.getElementById('{timer_dom_id}_text');
+
+        // If our DOM node is gone (Streamlit removed it), stop the interval
+        if (!wrap) {{ window['_{timer_dom_id}_running'] = false; return; }}
+
         var elapsed = (performance.now() - startedAt) / 1000;
         var left    = Math.max(0, remaining - elapsed);
         var pct     = total > 0 ? (1 - left / total) * 100 : 100;
         var urgent  = left <= 30;
 
-        display.textContent = fmt(left);
-        bar.style.width     = pct.toFixed(1) + '%';
-        bar.style.background= urgent ? '#ef4444' : '#f59e0b';
-        text.style.color    = urgent ? '#f87171' : '#fbbf24';
-        wrap.className      = urgent ? 'urgent' : 'normal';
+        if (display) display.textContent = fmt(left);
+        if (bar)     bar.style.width     = pct.toFixed(1) + '%';
+        if (bar)     bar.style.background= urgent ? '#ef4444' : '#f59e0b';
+        if (text)    text.style.color    = urgent ? '#f87171' : '#fbbf24';
+        if (wrap)    wrap.className      = urgent ? 'urgent' : '';
 
         if (left <= 0 && !expired) {{
           expired = true;
-          // Find the hidden sentinel button by its text content and click it.
-          // Streamlit renders button labels as text inside the button element.
-          // We search window.parent.document because st.components renders in an iframe.
-          try {{
-            var doc = window.parent.document;
-            var allBtns = doc.querySelectorAll('button');
-            for (var i = 0; i < allBtns.length; i++) {{
-              if (allBtns[i].innerText && allBtns[i].innerText.trim() === '__TIMER_EXPIRED__') {{
-                allBtns[i].click();
-                break;
-              }}
+          // JS is running directly in the main page (st.markdown, NOT an iframe).
+          // So document.querySelectorAll works directly — no window.parent needed.
+          var allBtns = document.querySelectorAll('button');
+          for (var i = 0; i < allBtns.length; i++) {{
+            var btnText = (allBtns[i].innerText || allBtns[i].textContent || '').trim();
+            if (btnText === '__TIMER_EXPIRED__') {{
+              allBtns[i].click();
+              break;
             }}
-          }} catch(e) {{}}
+          }}
         }}
       }}
 
-      // Run immediately then every 250 ms for smooth display without hammering.
       tick();
-      setInterval(tick, 250);
+      var iv = setInterval(function() {{
+        tick();
+        // Self-cleanup: if DOM node gone, cancel interval
+        if (!document.getElementById('{timer_dom_id}_wrap')) {{
+          clearInterval(iv);
+          window['_{timer_dom_id}_running'] = false;
+        }}
+      }}, 250);
     }})();
     </script>
-    """, height=80)  # compact fixed height — no scrollbar
+    """, unsafe_allow_html=True)
 
 
 # =============================================================================
