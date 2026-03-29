@@ -15477,12 +15477,18 @@ def _render_js_timer(remaining_seconds: float, total_seconds: int, submitted: bo
 
         if (left <= 0 && !expired) {{
           expired = true;
-          // Click the hidden Streamlit button to signal time-up to the server.
-          // We search the parent document (Streamlit renders iframes).
+          // Find the hidden sentinel button by its text content and click it.
+          // Streamlit renders button labels as text inside the button element.
+          // We search window.parent.document because st.components renders in an iframe.
           try {{
             var doc = window.parent.document;
-            var btn = doc.querySelector('button[data-testid="__timer_expired_btn_{q_idx}"]');
-            if (btn) {{ btn.click(); }}
+            var allBtns = doc.querySelectorAll('button');
+            for (var i = 0; i < allBtns.length; i++) {{
+              if (allBtns[i].innerText && allBtns[i].innerText.trim() === '__TIMER_EXPIRED__') {{
+                allBtns[i].click();
+                break;
+              }}
+            }}
           }} catch(e) {{}}
         }}
       }}
@@ -20118,26 +20124,34 @@ Generate {num_questions} questions now:
                     """, unsafe_allow_html=True)
 
                     # ── Hidden button: JS clicks this when countdown hits zero ────
-                    # Rendered invisible via CSS. When clicked it triggers a normal
-                    # Streamlit rerun → the auto-submit block below fires.
-                    st.markdown("""
-                    <style>
-                    button[data-testid^="__timer_expired_btn_"] {
-                        display: none !important;
-                        visibility: hidden !important;
-                        pointer-events: none !important;
-                        position: absolute !important;
-                        width: 0 !important; height: 0 !important;
-                        overflow: hidden !important;
-                    }
-                    </style>
-                    """, unsafe_allow_html=True)
-                    if st.button("⏱", key=f"__timer_expired_btn_{_q_idx_now}"):
-                        # JS clicked this — snapshot answer and set expired flag
+                    # Pattern: render the button inside a named st.empty() slot,
+                    # then immediately overwrite the slot with blank HTML so the
+                    # button is invisible to the user but still exists in the DOM
+                    # (Streamlit keeps widget state even when the visual is hidden).
+                    #
+                    # The JS in _render_js_timer() finds this button by its
+                    # data-testid and clicks it — triggering a normal Streamlit
+                    # callback which sets _timer_expired = True → auto-submit fires.
+                    _btn_slot = st.empty()
+                    with _btn_slot:
+                        _timer_btn_clicked = st.button(
+                            "__TIMER_EXPIRED__",
+                            key=f"__timer_expired_btn_{_q_idx_now}",
+                        )
+                    # Overwrite the slot immediately — button is now invisible
+                    # but still registered in Streamlit's widget tree.
+                    _btn_slot.markdown(
+                        "<div style='display:none;height:0;overflow:hidden;'></div>",
+                        unsafe_allow_html=True,
+                    )
+                    if _timer_btn_clicked:
+                        # JS clicked this — snapshot answer and set expired flag,
+                        # then immediately rerun so the auto-submit block below fires.
                         if not st.session_state.get("_timer_expired", False) and not _submitted_now:
                             _ans_key_snap = f"dynamic_interview_answer_{_q_idx_now}"
                             st.session_state["_timer_expired_answer"] = st.session_state.get(_ans_key_snap, "")
                             st.session_state["_timer_expired"] = True
+                            st.rerun()  # ← CRITICAL: triggers the auto-submit block below
 
 
                     # Refresh button — always visible, right-aligned, small
