@@ -15349,6 +15349,127 @@ import json
 
 
 # =============================================================================
+# MODULE-LEVEL TIMER FRAGMENT  (concurrency fix)
+# =============================================================================
+# PROBLEM: When _timer_fragment was defined as an *inner function* inside the
+# render body (decorated with @st.fragment(run_every=1)), Streamlit keyed the
+# fragment by its qualified name.  Because every concurrent user executed the
+# same code path, all sessions shared the same fragment name
+# ("_timer_fragment").  Streamlit's fragment scheduler could then deliver a
+# tick from User A's fragment into User B's session context — reading and
+# writing the wrong session_state, breaking timers and causing phantom
+# auto-submits for innocent users.
+#
+# FIX: Define the fragment ONCE at module level.  Streamlit assigns each
+# *invocation* (one per session) its own independent scheduler slot while
+# still keying it by the stable module-level qualified name.  Because
+# st.session_state is already fully isolated per browser session, all the
+# timer state keys (question_timer_start, timer_seconds, _timer_expired, …)
+# are read and written exclusively within the correct session — zero cross-
+# session contamination.
+# =============================================================================
+
+@st.fragment(run_every=1)
+def _interview_timer_fragment():
+    """
+    Standalone per-session timer fragment for the Interview Coach.
+
+    Reads exclusively from st.session_state so it is fully isolated per user.
+    Defined at module level so Streamlit assigns each session its own
+    scheduler slot — eliminating cross-session timer interference.
+    """
+    # Guard: bail if the timer has not been armed yet for this session
+    _start = st.session_state.get("question_timer_start")
+    _total = st.session_state.get("timer_seconds", 120)
+    if _start is None or _total is None or _total <= 0:
+        return  # Timer not active yet; fragment will retry on next tick
+
+    _elapsed   = time.time() - _start
+    _remaining = max(0, _total - _elapsed)
+    _mins      = int(_remaining // 60)
+    _secs      = int(_remaining % 60)
+    _pct       = 1.0 - (_remaining / _total)
+    _urgent    = _remaining <= 30
+    _submitted = st.session_state.get("dynamic_answer_submitted", False)
+
+    # ── Timer bar ──────────────────────────────────────────────────────────
+    if _submitted:
+        st.markdown("""
+        <div style="background:linear-gradient(135deg,rgba(52,211,153,0.10),rgba(52,211,153,0.05));
+                    border:1px solid rgba(52,211,153,0.30);border-radius:12px;
+                    padding:14px;text-align:center;">
+          <div style="font-size:1.2rem;font-weight:700;color:#34d399;">
+            ✅ Answer Submitted
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        _timer_color  = "#f87171" if _urgent else "#fbbf24"
+        _border_color = "rgba(244,67,54,0.45)" if _urgent else "rgba(251,191,36,0.25)"
+        _bg           = ("linear-gradient(135deg,rgba(244,67,54,0.12),rgba(244,67,54,0.06))"
+                         if _urgent else
+                         "linear-gradient(135deg,rgba(251,191,36,0.08),rgba(251,191,36,0.04))")
+        _bar_color    = "#ef4444" if _urgent else "#f59e0b"
+        _pulse_style  = "animation:t4pulse 1s ease-in-out infinite;" if _urgent else ""
+        st.markdown(f"""
+        <style>
+          @keyframes t4pulse {{
+            0%,100% {{ box-shadow: 0 0 0 0 rgba(244,67,54,0.0); }}
+            50%      {{ box-shadow: 0 0 0 6px rgba(244,67,54,0.18); }}
+          }}
+        </style>
+        <div style="background:{_bg};border:1px solid {_border_color};
+                    border-radius:12px;padding:14px;text-align:center;
+                    font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;
+                    {_pulse_style}">
+          <div style="font-size:1.4rem;font-weight:700;color:{_timer_color};
+                      letter-spacing:-0.01em;">
+            ⏰ Time Remaining: {_mins:02d}:{_secs:02d}
+          </div>
+          <div style="width:100%;height:4px;background:rgba(255,255,255,0.08);
+                      border-radius:99px;margin-top:10px;overflow:hidden;">
+            <div style="width:{int(_pct*100)}%;height:100%;border-radius:99px;
+                        background:{_bar_color};transition:width 0.9s linear;">
+            </div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # ── Question card (inside fragment so it never orphans) ────────────────
+    _q_text   = st.session_state.get("current_interview_question_text") or ""
+    _q_idx    = st.session_state.get("current_dynamic_interview_question", 0)
+    _qs       = st.session_state.get("dynamic_interview_questions", [])
+    if not _q_text and _qs:
+        _q_text = _qs[_q_idx] if _q_idx < len(_qs) else ""
+    _answered = len(st.session_state.get("dynamic_interview_answers", []))
+    _total_q  = st.session_state.get("original_num_questions", 1)
+    _num_res  = len(st.session_state.get("resume_based_questions", []))
+    _phase_badge = "📄 Resume-Based Question" if (_q_idx + 1) <= _num_res else "💼 Generic Interview Question"
+    _role     = st.session_state.get("interview_role", "")
+    _diff     = st.session_state.get("interview_difficulty", "")
+    st.markdown(f"""
+    <div class="quiz-card">
+        <h3 style="color:#38bdf8;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;font-weight:600;letter-spacing:-0.02em;">Question {_answered + 1} of {_total_q}</h3>
+        <div style="background:rgba(56,189,248,0.10);padding:6px 12px;border-radius:99px;margin:10px 0;display:inline-block;border:1px solid rgba(56,189,248,0.22);">
+            <span style="color:#38bdf8;font-weight:600;font-size:0.8rem;letter-spacing:0.03em;text-transform:uppercase;">{_phase_badge}</span>
+        </div>
+        <h4 style="color:#94a3b8;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;font-weight:500;font-size:0.875rem;margin:12px 0;letter-spacing:0.02em;">Role: {_role} | Difficulty: {_diff}</h4>
+        <p style="font-size:1rem;color:#f0f4f8;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;line-height:1.6;margin:14px 0;">{_q_text}</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Auto-submit trigger ────────────────────────────────────────────────
+    if _remaining <= 0 and not _submitted:
+        if not st.session_state.get("_timer_expired", False):
+            # Snapshot the answer widget value at the exact expiry moment so a
+            # late-typing user cannot change it after time's up.
+            _ans_key = f"dynamic_interview_answer_{st.session_state.get('current_dynamic_interview_question', 0)}"
+            st.session_state["_timer_expired_answer"] = st.session_state.get(_ans_key, "")
+            st.session_state["_timer_expired"] = True
+            st.rerun(scope="app")
+
+
+# =============================================================================
 # SUPABASE POSTGRESQL — SINGLE CACHED CONNECTION  (anti-flicker fix)
 # =============================================================================
 # @st.cache_resource creates the psycopg2 connection ONCE per server process
@@ -17839,7 +17960,7 @@ def show_resume_scanning_animation():
             unsafe_allow_html=True
         )
         progress.progress(value)
-        time.sleep(0.6)
+        time.sleep(0.15)  # FIX: reduced from 0.6s to 0.15s — animation delay, not rerun gate
 
     status.empty()
     progress.empty()
@@ -19510,9 +19631,7 @@ Generate {num_questions} questions now:
                         st.session_state.resume_context = resume_context
 
                         st.success("✅ Resume uploaded and analyzed successfully!")
-                        
-                        time.sleep(1)
-                        st.rerun()
+                        st.rerun()  # FIX 5: removed time.sleep(1) — blocks server thread
                     else:
                         st.error("Could not extract text from resume. Please ensure it's a valid PDF.")
         else:
@@ -19582,6 +19701,7 @@ Generate {num_questions} questions now:
                     )
                     # Keep target_role session_state in sync
                     st.session_state.target_role = selected_role
+                    st.session_state.interview_role = selected_role  # keep fragment in sync
                 else:
                     selected_role = None
                     st.session_state.target_role = None
@@ -19871,9 +19991,7 @@ Generate {num_questions} questions now:
                             st.session_state.interview_actual_start_time = time.time()
                             st.session_state.dynamic_answer_submitted = False
                             st.session_state.current_interview_question_text = all_questions[0]
-                            # Set to None — timer will be stamped on first render of the
-                            # interview page (after rerun), not here before sleep/animation
-                            st.session_state.question_timer_start = None
+                            st.session_state.question_timer_start = time.time()
                             st.session_state.timer_seconds = timer_seconds
                             st.session_state.interview_difficulty = interview_difficulty
                             st.session_state.interview_mode = interview_type
@@ -19889,8 +20007,7 @@ Generate {num_questions} questions now:
                                 show_resume_scanning_animation()
 
                             st.success("Questions generated! Starting your mock interview...")
-                            time.sleep(1)
-                            st.rerun()
+                            st.rerun()  # FIX 5: removed time.sleep(1)
                         else:
                             st.error("Failed to generate questions. Please try again.")
             
@@ -19921,104 +20038,77 @@ Generate {num_questions} questions now:
                 </div>
                 """, unsafe_allow_html=True)
 
+                # FIX 6: Early completion guard — resolve before fragment renders
+                if questions_answered >= st.session_state.original_num_questions and not st.session_state.dynamic_interview_completed:
+                    if st.session_state.get('interview_actual_start_time'):
+                        st.session_state.interview_final_duration_seconds = int(time.time() - st.session_state.interview_actual_start_time)
+                    else:
+                        st.session_state.interview_final_duration_seconds = None
+                    st.session_state.interview_result_saved = False
+                    st.session_state.dynamic_interview_completed = True
+                    st.rerun()
+
                 if questions_answered < st.session_state.original_num_questions:
                     question = st.session_state.current_interview_question_text or st.session_state.dynamic_interview_questions[st.session_state.current_dynamic_interview_question]
 
-                    # TIMER RESET: Stamp the timer on first render of this question.
-                    # question_timer_start is set to None before the st.rerun() that
-                    # brings us here, so the clock starts on the very first frame the
-                    # user actually sees — not seconds earlier during question generation.
+                    # TIMER RESET: Reset timer every time a new question loads
                     if st.session_state.question_timer_start is None:
                         st.session_state.question_timer_start = time.time()
 
-                    # Calculate remaining time (used for auto-submit guard below)
+                    # Calculate remaining time
                     elapsed_time = time.time() - st.session_state.question_timer_start
                     remaining_time = max(0, st.session_state.timer_seconds - elapsed_time)
 
-                    # ── SMOOTH TIMER via st.fragment ────────────────────────────
-                    # Rendered ABOVE the question card so it's the first element the
-                    # user sees. st.fragment(run_every=1) reruns ONLY this block every
-                    # second — question card, text area, and buttons never blink.
-                    # When time expires the fragment sets _timer_expired and calls
-                    # st.rerun(scope="app") to trigger auto-submit in the outer page.
+                    # ── SMOOTH TIMER via module-level st.fragment ───────────────
+                    # _interview_timer_fragment is defined ONCE at module level so
+                    # Streamlit gives each concurrent session its own independent
+                    # scheduler slot.  All state is read/written via st.session_state
+                    # which is already fully isolated per browser session.
+                    # See the module-level docstring for the full concurrency rationale.
+                    _interview_timer_fragment()
 
-                    @st.fragment(run_every=1)
-                    def _timer_fragment():
-                        # Stop ticking once answer is submitted — freeze the display
-                        if st.session_state.get("dynamic_answer_submitted", False):
-                            st.markdown("""
-                            <div style="background:linear-gradient(135deg,rgba(52,211,153,0.10),rgba(52,211,153,0.05));
-                                        border:1px solid rgba(52,211,153,0.30);border-radius:12px;
-                                        padding:14px;text-align:center;">
-                              <div style="font-size:1.2rem;font-weight:700;color:#34d399;">
-                                ✅ Answer Submitted
-                              </div>
-                            </div>
-                            """, unsafe_allow_html=True)
-                            return  # exits fragment — no more reruns until next question loads
 
-                        _elapsed   = time.time() - st.session_state.question_timer_start
-                        _remaining = max(0, st.session_state.timer_seconds - _elapsed)
-                        _mins      = int(_remaining // 60)
-                        _secs      = int(_remaining % 60)
-                        _pct       = 1.0 - (_remaining / st.session_state.timer_seconds)
-                        _urgent    = _remaining <= 30
-
-                        _timer_color    = "#f87171" if _urgent else "#fbbf24"
-                        _border_color   = "rgba(244,67,54,0.45)" if _urgent else "rgba(251,191,36,0.25)"
-                        _bg             = ("linear-gradient(135deg,rgba(244,67,54,0.12),rgba(244,67,54,0.06))"
-                                           if _urgent else
-                                           "linear-gradient(135deg,rgba(251,191,36,0.08),rgba(251,191,36,0.04))")
-                        _bar_color      = "#ef4444" if _urgent else "#f59e0b"
-                        _pulse_style    = "animation:t4pulse 1s ease-in-out infinite;" if _urgent else ""
-
-                        st.markdown(f"""
-                        <style>
-                          @keyframes t4pulse {{
-                            0%,100% {{ box-shadow: 0 0 0 0 rgba(244,67,54,0.0); }}
-                            50%      {{ box-shadow: 0 0 0 6px rgba(244,67,54,0.18); }}
-                          }}
-                        </style>
-                        <div style="background:{_bg};border:1px solid {_border_color};
-                                    border-radius:12px;padding:14px;text-align:center;
-                                    font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;
-                                    {_pulse_style}">
-                          <div style="font-size:1.4rem;font-weight:700;color:{_timer_color};
-                                      letter-spacing:-0.01em;">
-                            ⏰ Time Remaining: {_mins:02d}:{_secs:02d}
-                          </div>
-                          <div style="width:100%;height:4px;background:rgba(255,255,255,0.08);
-                                      border-radius:99px;margin-top:10px;overflow:hidden;">
-                            <div style="width:{int(_pct*100)}%;height:100%;border-radius:99px;
-                                        background:{_bar_color};transition:width 0.9s linear;">
-                            </div>
-                          </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                        # When time runs out, set a flag and do a FULL APP rerun for auto-submit.
-                        # CRITICAL: must use st.rerun(scope="app") — plain st.rerun() inside a
-                        # fragment only reruns the fragment, never the outer page.
-                        if _remaining <= 0 and not st.session_state.get("dynamic_answer_submitted", False):
-                            if not st.session_state.get("_timer_expired", False):
-                                st.session_state["_timer_expired"] = True
-                                st.rerun(scope="app")
-
-                    # ── Timer renders ABOVE the question card ─────────────
-                    _timer_fragment()
-
-                    # Question display with phase indicator
-                    phase_badge = "📄 Resume-Based Question" if current_index <= num_resume_qs else "💼 Generic Interview Question"
-                    st.markdown(f"""
-                    <div class="quiz-card">
-                        <h3 style="color:#38bdf8;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;font-weight:600;letter-spacing:-0.02em;">Question {questions_answered + 1} of {st.session_state.original_num_questions}</h3>
-                        <div style="background:rgba(56,189,248,0.10);padding:6px 12px;border-radius:99px;margin:10px 0;display:inline-block;border:1px solid rgba(56,189,248,0.22);">
-                            <span style="color:#38bdf8;font-weight:600;font-size:0.8rem;letter-spacing:0.03em;text-transform:uppercase;">{phase_badge}</span>
-                        </div>
-                        <h4 style="color:#94a3b8;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;font-weight:500;font-size:0.875rem;margin:12px 0;letter-spacing:0.02em;">Role: {selected_role} | Difficulty: {st.session_state.interview_difficulty}</h4>
-                        <p style="font-size:1rem;color:#f0f4f8;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;line-height:1.6;margin:14px 0;">{question}</p>
-                    </div>
+                    # Refresh button — always visible, right-aligned, small
+                    st.markdown("""
+                    <style>
+                    div[data-testid="stButton"]:has(button[data-testid="refresh_btn"]) {
+                        display: flex; justify-content: flex-end;
+                    }
+                    button[data-testid="refresh_btn"] {
+                        padding: 4px 14px !important;
+                        font-size: 0.75rem !important;
+                        height: auto !important;
+                        min-height: 0 !important;
+                        background: rgba(56,189,248,0.08) !important;
+                        border: 1px solid rgba(56,189,248,0.25) !important;
+                        color: #38bdf8 !important;
+                        border-radius: 6px !important;
+                    }
+                    </style>
                     """, unsafe_allow_html=True)
+                    if st.button("🔄 Refresh Interview", key="refresh_btn", help="Restart interview from scratch"):
+                        st.session_state.dynamic_interview_questions = []
+                        st.session_state.current_dynamic_interview_question = 0
+                        st.session_state.dynamic_interview_answers = []
+                        st.session_state.dynamic_interview_scores = []
+                        st.session_state.dynamic_interview_feedbacks = []
+                        st.session_state.dynamic_interview_completed = False
+                        st.session_state.dynamic_interview_started = False
+                        st.session_state.dynamic_answer_submitted = False
+                        st.session_state.current_interview_question_text = ""
+                        st.session_state.question_timer_start = None
+                        st.session_state.interview_result_saved = False
+                        st.session_state.interview_final_duration_seconds = None
+                        st.session_state.interview_actual_start_time = None
+                        st.session_state.pending_followup_display = ""
+                        st.session_state.pending_followup_strategy = ""
+                        st.session_state.escalation_layer = 1
+                        st.session_state.follow_up_count = 0
+                        st.session_state.current_interview_id = None
+                        st.session_state.question_db_ids = []
+                        st.session_state.pop("_timer_expired", None)
+                        st.session_state.pop("_timer_expired_answer", None)  # FIX 9b
+                        st.rerun()
 
                     # Answer input with character limit
                     answer_key = f"dynamic_interview_answer_{st.session_state.current_dynamic_interview_question}"
@@ -20041,7 +20131,12 @@ Generate {num_questions} questions now:
 
                         ARCHITECTURE FIX: Every answered question is immediately saved to the
                         interview_questions DB table so the PDF can use it as single source of truth.
+                        FIX 8: Idempotency guard — bail out immediately if this question index
+                        has already been processed (prevents double-submission on rapid reruns).
                         """
+                        # FIX 8: Idempotency check using answered count vs question index
+                        if len(st.session_state.dynamic_interview_answers) > q_idx:
+                            return  # Already processed this question index — do not re-evaluate
                         diff = st.session_state.interview_difficulty
                         eval_res = evaluate_interview_answer_for_scores(
                             ans_text, q_text, diff,
@@ -20122,15 +20217,21 @@ Generate {num_questions} questions now:
                     if 'pending_followup_strategy' not in st.session_state:
                         st.session_state.pending_followup_strategy = ""
 
-                    # Auto-submit: triggered either by the fragment setting _timer_expired flag,
-                    # or by a natural rerun where remaining_time is already 0
+                    # Auto-submit: triggered by the fragment setting _timer_expired flag.
+                    # FIX 2+3: Pop flag atomically, recompute remaining time fresh (not stale),
+                    # and guard with dynamic_answer_submitted to prevent double-submission.
                     _timer_expired_flag = st.session_state.pop("_timer_expired", False)
-                    if (_timer_expired_flag or remaining_time <= 0) and not st.session_state.dynamic_answer_submitted:
-                        if not answer.strip():
-                            answer = "⚠️ No Answer"
+                    _fresh_elapsed = time.time() - st.session_state.question_timer_start if st.session_state.question_timer_start else 0
+                    _fresh_remaining = max(0, st.session_state.timer_seconds - _fresh_elapsed)
+                    if (_timer_expired_flag or _fresh_remaining <= 0) and not st.session_state.dynamic_answer_submitted:
+                        # FIX 3: Set submitted flag BEFORE processing to block any concurrent rerun
+                        st.session_state.dynamic_answer_submitted = True
+                        # FIX 4b: Prefer the answer snapshotted at expiry time (prevents post-expiry edits)
+                        _snapshotted = st.session_state.pop("_timer_expired_answer", "").strip()
+                        _auto_answer = _snapshotted if _snapshotted else (answer.strip() if answer.strip() else "⚠️ No Answer")
                         with st.spinner("Evaluating your answer..."):
                             _process_submission(
-                                answer, question,
+                                _auto_answer, question,
                                 st.session_state.current_dynamic_interview_question,
                                 questions_answered
                             )
@@ -20222,7 +20323,8 @@ Generate {num_questions} questions now:
                                 st.session_state.dynamic_answer_submitted = False
                                 st.session_state.pending_followup_display = ""
                                 st.session_state.pending_followup_strategy = ""
-                                st.session_state.pop("_timer_expired", None)  # clear so next Q starts clean
+                                st.session_state.pop("_timer_expired", None)       # clear so next Q starts clean
+                                st.session_state.pop("_timer_expired_answer", None)  # FIX 9: clear snapshotted answer
                                 if st.session_state.current_dynamic_interview_question < len(st.session_state.dynamic_interview_questions):
                                     st.session_state.current_interview_question_text = st.session_state.dynamic_interview_questions[st.session_state.current_dynamic_interview_question]
                                 else:
@@ -20236,34 +20338,6 @@ Generate {num_questions} questions now:
                     interview_progress = questions_answered / st.session_state.original_num_questions
                     st.markdown("### Interview Progress")
                     st.progress(interview_progress)
-
-                    # ── Refresh Interview button — always visible, never inside a column
-                    # block tied to the answer/submit flow, so Ctrl+Enter reruns cannot
-                    # make it disappear. ─────────────────────────────────────────────
-                    st.markdown("<div style='margin-top:8px;'>", unsafe_allow_html=True)
-                    if st.button("🔄 Refresh Interview", key="refresh_interview_btn"):
-                        st.session_state.dynamic_interview_questions = []
-                        st.session_state.current_dynamic_interview_question = 0
-                        st.session_state.dynamic_interview_answers = []
-                        st.session_state.dynamic_interview_scores = []
-                        st.session_state.dynamic_interview_feedbacks = []
-                        st.session_state.dynamic_interview_completed = False
-                        st.session_state.dynamic_interview_started = False
-                        st.session_state.dynamic_answer_submitted = False
-                        st.session_state.current_interview_question_text = ""
-                        st.session_state.question_timer_start = None
-                        st.session_state.interview_result_saved = False
-                        st.session_state.interview_final_duration_seconds = None
-                        st.session_state.interview_actual_start_time = None
-                        st.session_state.pending_followup_display = ""
-                        st.session_state.pending_followup_strategy = ""
-                        st.session_state.escalation_layer = 1
-                        st.session_state.follow_up_count = 0
-                        st.session_state.current_interview_id = None
-                        st.session_state.question_db_ids = []
-                        st.session_state.pop("_timer_expired", None)
-                        st.rerun()
-                    st.markdown("</div>", unsafe_allow_html=True)
 
                     # CRITICAL FIX: Review Previous Answers - show all properly
                     if len(st.session_state.dynamic_interview_answers) > 0:
@@ -20293,17 +20367,15 @@ Generate {num_questions} questions now:
                     # the visual countdown entirely in the browser. Auto-submit
                     # is triggered by the hidden __TIMER_EXPIRED__ button click.
                 else:
-                    # CRITICAL FIX: All questions answered, move to completion automatically
-                    # Capture exact duration at auto-completion moment
-                    if st.session_state.get('interview_actual_start_time'):
-                        st.session_state.interview_final_duration_seconds = int(time.time() - st.session_state.interview_actual_start_time)
-                    else:
-                        st.session_state.interview_final_duration_seconds = None
-                    st.session_state.interview_result_saved = False
-                    st.session_state.dynamic_interview_completed = True
-                    st.success(f"✅ Completed all {st.session_state.original_num_questions} questions!")
-                    time.sleep(1)
-                    st.rerun()
+                    # FIX 6 (fallback): early guard above handles this; this is a safety net
+                    if not st.session_state.dynamic_interview_completed:
+                        if st.session_state.get('interview_actual_start_time'):
+                            st.session_state.interview_final_duration_seconds = int(time.time() - st.session_state.interview_actual_start_time)
+                        else:
+                            st.session_state.interview_final_duration_seconds = None
+                        st.session_state.interview_result_saved = False
+                        st.session_state.dynamic_interview_completed = True
+                        st.rerun()
             
             # UNIFIED: Interview completed + Course Recommendations + DB + PDF
             elif st.session_state.dynamic_interview_completed:
