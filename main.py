@@ -15371,8 +15371,8 @@ def _render_js_timer(remaining_seconds: float, total_seconds: int, submitted: bo
 
     The countdown runs entirely in the browser — no server round-trip per tick.
     When the countdown hits zero the JS clicks the hidden Streamlit button
-    whose key is  '__timer_expired_btn_{q_idx}'  which triggers a normal
-    Streamlit interaction → sets session_state flags → auto-submits answer.
+    a rerun beacon that calls window.parent.location.reload() when the
+    countdown hits zero → server-side _fresh_remaining <= 0 → auto-submits.
 
     Parameters
     ----------
@@ -15477,35 +15477,15 @@ def _render_js_timer(remaining_seconds: float, total_seconds: int, submitted: bo
 
         if (left <= 0 && !expired) {{
           expired = true;
-          // FIX: Retry up to 5 times with 200 ms gap.
-          // The button may not yet be painted on the first tick that fires at
-          // exactly t=0 (React render lag), so a single attempt is unreliable.
-          // We also search both innerText AND textContent to cover browsers that
-          // differ in whitespace handling.
-          var _attempts = 0;
-          function _clickTimerBtn() {{
-            _attempts++;
-            var clicked = false;
-            try {{
-              var doc = window.parent.document;
-              var allBtns = doc.querySelectorAll('button');
-              for (var i = 0; i < allBtns.length; i++) {{
-                var label = (allBtns[i].innerText || allBtns[i].textContent || '').trim();
-                if (label === '__TIMER_EXPIRED__') {{
-                  allBtns[i].click();
-                  clicked = true;
-                  break;
-                }}
-              }}
-            }} catch(e) {{
-              // Cross-origin iframe — window.parent.document access blocked.
-              console.warn('[Timer] Cross-origin block on attempt', _attempts, e);
-            }}
-            if (!clicked && _attempts < 5) {{
-              setTimeout(_clickTimerBtn, 200);
-            }}
-          }}
-          _clickTimerBtn();
+          // Timer display freezes at 00:00.
+          // Auto-submit is handled server-side: the beacon component below
+          // sends a postMessage → Streamlit reruns → _fresh_remaining <= 0
+          // fires the auto-submit. No button-clicking needed here.
+          display.textContent = '00:00';
+          bar.style.width = '100%';
+          bar.style.background = '#ef4444';
+          text.style.color = '#f87171';
+          wrap.className = 'urgent';
         }}
       }}
 
@@ -20139,41 +20119,39 @@ Generate {num_questions} questions now:
                     </div>
                     """, unsafe_allow_html=True)
 
-                    # ── Hidden button: JS clicks this when countdown hits zero ────
-                    # FIX: Do NOT use st.empty() + overwrite — that removes the
-                    # button from the DOM so JS querySelectorAll('button') cannot
-                    # find it and the click never fires.
-                    # Instead, render the button normally and hide it with CSS only.
-                    # The button stays in the DOM → JS finds it → click works.
-                    st.markdown(
-                        """<style>
-                        div[data-testid="stButton"]:has(button p) button p {
-                            /* fallback — actual hide is on the wrapper below */
-                        }
-                        </style>""",
-                        unsafe_allow_html=True,
-                    )
-                    # Wrap in a zero-height CSS-hidden container so the button is
-                    # invisible to the user but fully present in the DOM tree.
-                    st.markdown(
-                        "<div style='position:absolute;width:0;height:0;"
-                        "overflow:hidden;opacity:0;pointer-events:none;"
-                        "z-index:-9999;'>",
-                        unsafe_allow_html=True,
-                    )
-                    _timer_btn_clicked = st.button(
-                        "__TIMER_EXPIRED__",
-                        key=f"__timer_expired_btn_{_q_idx_now}",
-                    )
-                    st.markdown("</div>", unsafe_allow_html=True)
-                    if _timer_btn_clicked:
-                        # JS clicked this — snapshot answer and set expired flag,
-                        # then immediately rerun so the auto-submit block below fires.
-                        if not st.session_state.get("_timer_expired", False) and not _submitted_now:
-                            _ans_key_snap = f"dynamic_interview_answer_{_q_idx_now}"
-                            st.session_state["_timer_expired_answer"] = st.session_state.get(_ans_key_snap, "")
-                            st.session_state["_timer_expired"] = True
-                            st.rerun()  # ← CRITICAL: triggers the auto-submit block below
+                    # ── Rerun beacon: triggers auto-submit when timer expires ─────
+                    # The __TIMER_EXPIRED__ button + JS-click approach is removed.
+                    # It never worked because st.components iframes are sandboxed —
+                    # window.parent.document access is blocked cross-origin.
+                    #
+                    # New approach (no extra packages needed):
+                    #   1. Inject a beacon component with setTimeout(remaining_ms).
+                    #   2. When it fires, call window.parent.location.reload() which
+                    #      forces a full Streamlit page rerun.
+                    #   3. On that rerun, _fresh_remaining <= 0 → auto-submit fires.
+                    #
+                    # window.parent.location (not .document) IS accessible cross-origin
+                    # for same-site iframes (Streamlit components qualify).
+                    if not _submitted_now and remaining_time > 0:
+                        _beacon_ms = int(remaining_time * 1000) + 800  # 0.8s buffer
+                        st.components.v1.html(
+                            f"""<script>
+                            (function() {{
+                              if (window._beaconArmed) return;
+                              window._beaconArmed = true;
+                              setTimeout(function() {{
+                                try {{
+                                  window.parent.location.reload();
+                                }} catch(e) {{
+                                  // Last-resort fallback: reload this frame,
+                                  // which also triggers a Streamlit rerun.
+                                  window.location.reload();
+                                }}
+                              }}, {_beacon_ms});
+                            }})();
+                            </script>""",
+                            height=0,
+                        )
 
 
                     # Refresh button — always visible, right-aligned, small
@@ -20325,19 +20303,19 @@ Generate {num_questions} questions now:
                     if 'pending_followup_strategy' not in st.session_state:
                         st.session_state.pending_followup_strategy = ""
 
-                    # Auto-submit: triggered by the fragment setting _timer_expired flag.
-                    # FIX 2+3: Pop flag atomically, recompute remaining time fresh (not stale),
-                    # and guard with dynamic_answer_submitted to prevent double-submission.
-                    _timer_expired_flag = st.session_state.pop("_timer_expired", False)
-                    _fresh_elapsed = time.time() - st.session_state.question_timer_start if st.session_state.question_timer_start else 0
+                    # ── Auto-submit: fires on the beacon-triggered rerun ───────────
+                    # Pure server-side check — no JS flags. On every rerun we
+                    # recompute elapsed time; when _fresh_remaining hits 0 (because
+                    # the beacon fired window.parent.location.reload()), this fires.
+                    # Guard with dynamic_answer_submitted to prevent double-submission.
+                    st.session_state.pop("_timer_expired", None)        # clean up legacy key
+                    st.session_state.pop("_timer_expired_answer", None) # clean up legacy key
+                    _fresh_elapsed   = time.time() - st.session_state.question_timer_start if st.session_state.question_timer_start else 0
                     _fresh_remaining = max(0, st.session_state.timer_seconds - _fresh_elapsed)
-                    if (_timer_expired_flag or _fresh_remaining <= 0) and not st.session_state.dynamic_answer_submitted:
-                        # FIX 3: Set submitted flag BEFORE processing to block any concurrent rerun
-                        st.session_state.dynamic_answer_submitted = True
-                        # FIX 4b: Prefer the answer snapshotted at expiry time (prevents post-expiry edits)
-                        _snapshotted = st.session_state.pop("_timer_expired_answer", "").strip()
-                        _auto_answer = _snapshotted if _snapshotted else (answer.strip() if answer.strip() else "⚠️ No Answer")
-                        with st.spinner("Evaluating your answer..."):
+                    if _fresh_remaining <= 0 and not st.session_state.dynamic_answer_submitted:
+                        st.session_state.dynamic_answer_submitted = True  # set FIRST — prevents double-submission
+                        _auto_answer = answer.strip() if answer.strip() else "⚠️ No Answer"
+                        with st.spinner("⏰ Time's up! Evaluating your answer..."):
                             _process_submission(
                                 _auto_answer, question,
                                 st.session_state.current_dynamic_interview_question,
@@ -20473,7 +20451,7 @@ Generate {num_questions} questions now:
                     # NOTE: No more time.sleep(1) + st.rerun() here.
                     # The JS timer inside the components.html block above handles
                     # the visual countdown entirely in the browser. Auto-submit
-                    # is triggered by the hidden __TIMER_EXPIRED__ button click.
+                    # is triggered by the beacon reload → server-side _fresh_remaining check.
                 else:
                     # FIX 6 (fallback): early guard above handles this; this is a safety net
                     if not st.session_state.dynamic_interview_completed:
