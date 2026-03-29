@@ -15349,51 +15349,39 @@ import json
 
 
 # =============================================================================
-# MODULE-LEVEL TIMER FRAGMENT  (concurrency fix)
+# BROWSER-SIDE JS TIMER  (final concurrency fix)
 # =============================================================================
-# PROBLEM: When _timer_fragment was defined as an *inner function* inside the
-# render body (decorated with @st.fragment(run_every=1)), Streamlit keyed the
-# fragment by its qualified name.  Because every concurrent user executed the
-# same code path, all sessions shared the same fragment name
-# ("_timer_fragment").  Streamlit's fragment scheduler could then deliver a
-# tick from User A's fragment into User B's session context — reading and
-# writing the wrong session_state, breaking timers and causing phantom
-# auto-submits for innocent users.
+# ROOT CAUSE of slow/jammed timers under concurrent load:
+#   st.fragment(run_every=1) wakes up a SERVER thread every second PER USER.
+#   With 2 users → 2 threads fighting every second → GIL contention → timer
+#   ticks arrive late → display freezes / lags.
 #
-# FIX: Define the fragment ONCE at module level.  Streamlit assigns each
-# *invocation* (one per session) its own independent scheduler slot while
-# still keying it by the stable module-level qualified name.  Because
-# st.session_state is already fully isolated per browser session, all the
-# timer state keys (question_timer_start, timer_seconds, _timer_expired, …)
-# are read and written exclusively within the correct session — zero cross-
-# session contamination.
+# SOLUTION: Move the countdown 100% into the BROWSER with JavaScript.
+#   - JS setInterval runs in the user's own browser tab — zero server load.
+#   - 10 users running interviews = 0 extra server threads for timer ticks.
+#   - The server is only contacted ONCE per question: when time expires,
+#     the JS clicks a hidden Streamlit button to trigger auto-submit.
+#   - question_timer_start (time.time()) is still stored in session_state
+#     so the server always knows the true elapsed time for scoring/duration.
 # =============================================================================
 
-@st.fragment(run_every=1)
-def _interview_timer_fragment():
+def _render_js_timer(remaining_seconds: float, total_seconds: int, submitted: bool, q_idx: int):
     """
-    Standalone per-session timer fragment for the Interview Coach.
+    Render a pure-JS countdown timer inside an st.components.v1.html block.
 
-    Reads exclusively from st.session_state so it is fully isolated per user.
-    Defined at module level so Streamlit assigns each session its own
-    scheduler slot — eliminating cross-session timer interference.
+    The countdown runs entirely in the browser — no server round-trip per tick.
+    When the countdown hits zero the JS clicks the hidden Streamlit button
+    whose key is  '__timer_expired_btn_{q_idx}'  which triggers a normal
+    Streamlit interaction → sets session_state flags → auto-submits answer.
+
+    Parameters
+    ----------
+    remaining_seconds : float   Seconds left as calculated by the server on this render.
+    total_seconds     : int     Total seconds for this question (for the progress bar).
+    submitted         : bool    If True, show "Answer Submitted" banner instead.
+    q_idx             : int     Current question index (used to key the hidden button).
     """
-    # Guard: bail if the timer has not been armed yet for this session
-    _start = st.session_state.get("question_timer_start")
-    _total = st.session_state.get("timer_seconds", 120)
-    if _start is None or _total is None or _total <= 0:
-        return  # Timer not active yet; fragment will retry on next tick
-
-    _elapsed   = time.time() - _start
-    _remaining = max(0, _total - _elapsed)
-    _mins      = int(_remaining // 60)
-    _secs      = int(_remaining % 60)
-    _pct       = 1.0 - (_remaining / _total)
-    _urgent    = _remaining <= 30
-    _submitted = st.session_state.get("dynamic_answer_submitted", False)
-
-    # ── Timer bar ──────────────────────────────────────────────────────────
-    if _submitted:
+    if submitted:
         st.markdown("""
         <div style="background:linear-gradient(135deg,rgba(52,211,153,0.10),rgba(52,211,153,0.05));
                     border:1px solid rgba(52,211,153,0.30);border-radius:12px;
@@ -15403,70 +15391,108 @@ def _interview_timer_fragment():
           </div>
         </div>
         """, unsafe_allow_html=True)
-    else:
-        _timer_color  = "#f87171" if _urgent else "#fbbf24"
-        _border_color = "rgba(244,67,54,0.45)" if _urgent else "rgba(251,191,36,0.25)"
-        _bg           = ("linear-gradient(135deg,rgba(244,67,54,0.12),rgba(244,67,54,0.06))"
-                         if _urgent else
-                         "linear-gradient(135deg,rgba(251,191,36,0.08),rgba(251,191,36,0.04))")
-        _bar_color    = "#ef4444" if _urgent else "#f59e0b"
-        _pulse_style  = "animation:t4pulse 1s ease-in-out infinite;" if _urgent else ""
-        st.markdown(f"""
-        <style>
-          @keyframes t4pulse {{
-            0%,100% {{ box-shadow: 0 0 0 0 rgba(244,67,54,0.0); }}
-            50%      {{ box-shadow: 0 0 0 6px rgba(244,67,54,0.18); }}
-          }}
-        </style>
-        <div style="background:{_bg};border:1px solid {_border_color};
-                    border-radius:12px;padding:14px;text-align:center;
-                    font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;
-                    {_pulse_style}">
-          <div style="font-size:1.4rem;font-weight:700;color:{_timer_color};
-                      letter-spacing:-0.01em;">
-            ⏰ Time Remaining: {_mins:02d}:{_secs:02d}
-          </div>
-          <div style="width:100%;height:4px;background:rgba(255,255,255,0.08);
-                      border-radius:99px;margin-top:10px;overflow:hidden;">
-            <div style="width:{int(_pct*100)}%;height:100%;border-radius:99px;
-                        background:{_bar_color};transition:width 0.9s linear;">
-            </div>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
+        return
 
-    # ── Question card (inside fragment so it never orphans) ────────────────
-    _q_text   = st.session_state.get("current_interview_question_text") or ""
-    _q_idx    = st.session_state.get("current_dynamic_interview_question", 0)
-    _qs       = st.session_state.get("dynamic_interview_questions", [])
-    if not _q_text and _qs:
-        _q_text = _qs[_q_idx] if _q_idx < len(_qs) else ""
-    _answered = len(st.session_state.get("dynamic_interview_answers", []))
-    _total_q  = st.session_state.get("original_num_questions", 1)
-    _num_res  = len(st.session_state.get("resume_based_questions", []))
-    _phase_badge = "📄 Resume-Based Question" if (_q_idx + 1) <= _num_res else "💼 Generic Interview Question"
-    _role     = st.session_state.get("interview_role", "")
-    _diff     = st.session_state.get("interview_difficulty", "")
-    st.markdown(f"""
-    <div class="quiz-card">
-        <h3 style="color:#38bdf8;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;font-weight:600;letter-spacing:-0.02em;">Question {_answered + 1} of {_total_q}</h3>
-        <div style="background:rgba(56,189,248,0.10);padding:6px 12px;border-radius:99px;margin:10px 0;display:inline-block;border:1px solid rgba(56,189,248,0.22);">
-            <span style="color:#38bdf8;font-weight:600;font-size:0.8rem;letter-spacing:0.03em;text-transform:uppercase;">{_phase_badge}</span>
-        </div>
-        <h4 style="color:#94a3b8;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;font-weight:500;font-size:0.875rem;margin:12px 0;letter-spacing:0.02em;">Role: {_role} | Difficulty: {_diff}</h4>
-        <p style="font-size:1rem;color:#f0f4f8;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;line-height:1.6;margin:14px 0;">{_q_text}</p>
+    # Clamp so we never pass a negative value into JS
+    remaining_seconds = max(0.0, remaining_seconds)
+
+    st.components.v1.html(f"""
+    <style>
+      @keyframes t4pulse {{
+        0%,100% {{ box-shadow: 0 0 0 0 rgba(244,67,54,0.0); }}
+        50%      {{ box-shadow: 0 0 0 6px rgba(244,67,54,0.18); }}
+      }}
+      #timer-wrap {{
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+        border-radius: 12px;
+        padding: 14px;
+        text-align: center;
+        transition: background 0.5s, border-color 0.5s;
+      }}
+      #timer-wrap.normal {{
+        background: linear-gradient(135deg,rgba(251,191,36,0.08),rgba(251,191,36,0.04));
+        border: 1px solid rgba(251,191,36,0.25);
+      }}
+      #timer-wrap.urgent {{
+        background: linear-gradient(135deg,rgba(244,67,54,0.12),rgba(244,67,54,0.06));
+        border: 1px solid rgba(244,67,54,0.45);
+        animation: t4pulse 1s ease-in-out infinite;
+      }}
+      #timer-text {{
+        font-size: 1.4rem;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+        transition: color 0.5s;
+      }}
+      #timer-track {{
+        width: 100%; height: 4px;
+        background: rgba(255,255,255,0.08);
+        border-radius: 99px;
+        margin-top: 10px;
+        overflow: hidden;
+      }}
+      #timer-bar {{
+        height: 100%;
+        border-radius: 99px;
+        transition: width 0.95s linear, background 0.5s;
+      }}
+    </style>
+
+    <div id="timer-wrap" class="normal">
+      <div id="timer-text">⏰ Time Remaining: <span id="timer-display">--:--</span></div>
+      <div id="timer-track"><div id="timer-bar"></div></div>
     </div>
-    """, unsafe_allow_html=True)
 
-    # ── Auto-submit trigger ────────────────────────────────────────────────
-    if _remaining <= 0 and not _submitted:
-        if not st.session_state.get("_timer_expired", False):
-            # Snapshot the answer widget value at the exact expiry moment so a
-            # late-typing user cannot change it after time's up.
-            _ans_key = f"dynamic_interview_answer_{st.session_state.get('current_dynamic_interview_question', 0)}"
-            st.session_state["_timer_expired_answer"] = st.session_state.get(_ans_key, "")
-            st.session_state["_timer_expired"] = True
-            st.rerun(scope="app")
+    <script>
+    (function() {{
+      // Server told us exactly how many seconds remain at render time.
+      // Use performance.now() for drift-free sub-millisecond accuracy in browser.
+      var remaining  = {remaining_seconds:.3f};
+      var total      = {total_seconds};
+      var startedAt  = performance.now();
+      var expired    = false;
+
+      var wrap    = document.getElementById('timer-wrap');
+      var display = document.getElementById('timer-display');
+      var bar     = document.getElementById('timer-bar');
+      var text    = document.getElementById('timer-text');
+
+      function fmt(secs) {{
+        var m = Math.floor(secs / 60);
+        var s = Math.floor(secs % 60);
+        return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+      }}
+
+      function tick() {{
+        var elapsed = (performance.now() - startedAt) / 1000;
+        var left    = Math.max(0, remaining - elapsed);
+        var pct     = total > 0 ? (1 - left / total) * 100 : 100;
+        var urgent  = left <= 30;
+
+        display.textContent = fmt(left);
+        bar.style.width     = pct.toFixed(1) + '%';
+        bar.style.background= urgent ? '#ef4444' : '#f59e0b';
+        text.style.color    = urgent ? '#f87171' : '#fbbf24';
+        wrap.className      = urgent ? 'urgent' : 'normal';
+
+        if (left <= 0 && !expired) {{
+          expired = true;
+          // Click the hidden Streamlit button to signal time-up to the server.
+          // We search the parent document (Streamlit renders iframes).
+          try {{
+            var doc = window.parent.document;
+            var btn = doc.querySelector('button[data-testid="__timer_expired_btn_{q_idx}"]');
+            if (btn) {{ btn.click(); }}
+          }} catch(e) {{}}
+        }}
+      }}
+
+      // Run immediately then every 250 ms for smooth display without hammering.
+      tick();
+      setInterval(tick, 250);
+    }})();
+    </script>
+    """, height=80)  # compact fixed height — no scrollbar
 
 
 # =============================================================================
@@ -20055,17 +20081,63 @@ Generate {num_questions} questions now:
                     if st.session_state.question_timer_start is None:
                         st.session_state.question_timer_start = time.time()
 
-                    # Calculate remaining time
-                    elapsed_time = time.time() - st.session_state.question_timer_start
+                    # ── Calculate remaining time (server-side, passed to JS) ──
+                    elapsed_time   = time.time() - st.session_state.question_timer_start
                     remaining_time = max(0, st.session_state.timer_seconds - elapsed_time)
+                    _q_idx_now     = st.session_state.current_dynamic_interview_question
+                    _submitted_now = st.session_state.get("dynamic_answer_submitted", False)
 
-                    # ── SMOOTH TIMER via module-level st.fragment ───────────────
-                    # _interview_timer_fragment is defined ONCE at module level so
-                    # Streamlit gives each concurrent session its own independent
-                    # scheduler slot.  All state is read/written via st.session_state
-                    # which is already fully isolated per browser session.
-                    # See the module-level docstring for the full concurrency rationale.
-                    _interview_timer_fragment()
+                    # ── Pure-JS browser timer (zero server load per tick) ────────
+                    # The countdown runs entirely in the user's browser via JS
+                    # setInterval — no server thread wakes up every second.
+                    # When it hits zero the JS clicks the hidden button below,
+                    # which triggers a normal Streamlit interaction → auto-submit.
+                    _render_js_timer(
+                        remaining_seconds=remaining_time,
+                        total_seconds=st.session_state.timer_seconds,
+                        submitted=_submitted_now,
+                        q_idx=_q_idx_now,
+                    )
+
+                    # ── Question card (rendered by server, NOT inside a fragment) ─
+                    _answered_now = len(st.session_state.get("dynamic_interview_answers", []))
+                    _total_q_now  = st.session_state.get("original_num_questions", 1)
+                    _num_res_now  = len(st.session_state.get("resume_based_questions", []))
+                    _phase_badge  = "📄 Resume-Based Question" if (_q_idx_now + 1) <= _num_res_now else "💼 Generic Interview Question"
+                    _role_now     = st.session_state.get("interview_role", "")
+                    _diff_now     = st.session_state.get("interview_difficulty", "")
+                    st.markdown(f"""
+                    <div class="quiz-card">
+                        <h3 style="color:#38bdf8;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;font-weight:600;letter-spacing:-0.02em;">Question {_answered_now + 1} of {_total_q_now}</h3>
+                        <div style="background:rgba(56,189,248,0.10);padding:6px 12px;border-radius:99px;margin:10px 0;display:inline-block;border:1px solid rgba(56,189,248,0.22);">
+                            <span style="color:#38bdf8;font-weight:600;font-size:0.8rem;letter-spacing:0.03em;text-transform:uppercase;">{_phase_badge}</span>
+                        </div>
+                        <h4 style="color:#94a3b8;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;font-weight:500;font-size:0.875rem;margin:12px 0;letter-spacing:0.02em;">Role: {_role_now} | Difficulty: {_diff_now}</h4>
+                        <p style="font-size:1rem;color:#f0f4f8;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;line-height:1.6;margin:14px 0;">{question}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    # ── Hidden button: JS clicks this when countdown hits zero ────
+                    # Rendered invisible via CSS. When clicked it triggers a normal
+                    # Streamlit rerun → the auto-submit block below fires.
+                    st.markdown("""
+                    <style>
+                    button[data-testid^="__timer_expired_btn_"] {
+                        display: none !important;
+                        visibility: hidden !important;
+                        pointer-events: none !important;
+                        position: absolute !important;
+                        width: 0 !important; height: 0 !important;
+                        overflow: hidden !important;
+                    }
+                    </style>
+                    """, unsafe_allow_html=True)
+                    if st.button("⏱", key=f"__timer_expired_btn_{_q_idx_now}"):
+                        # JS clicked this — snapshot answer and set expired flag
+                        if not st.session_state.get("_timer_expired", False) and not _submitted_now:
+                            _ans_key_snap = f"dynamic_interview_answer_{_q_idx_now}"
+                            st.session_state["_timer_expired_answer"] = st.session_state.get(_ans_key_snap, "")
+                            st.session_state["_timer_expired"] = True
 
 
                     # Refresh button — always visible, right-aligned, small
