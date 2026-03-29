@@ -257,7 +257,7 @@ LENGTH: 3 short-to-medium paragraphs. Maximum 350 words.
         with st.spinner("✉️ Generating cover letter..."):
             try:
                 with llm_semaphore:
-                cover_letter = call_llm(prompt, session=st.session_state).strip()
+                    cover_letter = call_llm(prompt, session=st.session_state).strip()
             except Exception as e:
                 st.error(f"❌ Failed to generate cover letter: {e}")
                 return
