@@ -3428,101 +3428,32 @@ gender_words = {
     ]
 }
 
-def _clean_ocr_text(text: str) -> str:
-    """
-    Normalise OCR-extracted text before bias detection.
-
-    OCR engines introduce artefacts that break sentence splitting and
-    word-boundary matching.  This function removes them so that scanned
-    PDFs produce the same reliable word counts as native-text PDFs.
-    """
-    import unicodedata
-
-    # 1. Unicode normalise — decompose ligatures (fi, fl, oe, etc.)
-    text = unicodedata.normalize("NFKD", text)
-
-    # 2. Re-join hyphenated line-breaks  ("dynam-\nic" -> "dynamic")
-    text = re.sub(r"-\n\s*", "", text)
-
-    # 3. Replace whitespace variants with a single space (keep newlines)
-    text = re.sub(r"[^\S\n]+", " ", text)
-
-    # 4. Collapse multiple blank lines to one
-    text = re.sub(r"\n{2,}", "\n", text)
-
-    # 5. Remove stray ASCII control characters
-    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
-
-    # 6. Fix common OCR character substitutions that break word boundaries
-    ocr_fixes = {
-        "\u2019": "'",   # right single quotation -> apostrophe
-        "\u2018": "'",   # left single quotation -> apostrophe
-        "\u201c": '"',   # left double quotation
-        "\u201d": '"',   # right double quotation
-        "\u2014": " ",   # em-dash -> space
-        "\u2013": " ",   # en-dash -> space
-        "\u2022": " ",   # bullet -> space
-        "\u00b7": " ",   # middle dot -> space
-        "\ufb01": "fi",  # fi ligature
-        "\ufb02": "fl",  # fl ligature
-        "\ufb03": "ffi", # ffi ligature
-        "\ufb04": "ffl", # ffl ligature
-    }
-    for bad, good in ocr_fixes.items():
-        text = text.replace(bad, good)
-
-    return text.strip()
-
-
 def detect_bias(text):
-    """
-    Detect gender-coded words in resume text.
-
-    OCR-aware: text is normalised before processing so that scanned/image-based
-    PDFs produce the same reliable word counts as native-text PDFs.
-
-    Sentence splitting uses both punctuation AND newlines so that OCR output
-    (which often lacks terminal punctuation) is still segmented correctly.
-
-    Deduplication key is (word, normalised_sentence) so the same word matched
-    in two genuinely different sentences counts twice, but the same sentence
-    matched by two overlapping patterns counts only once per gender category.
-    """
-    # ── Pre-process: normalise OCR artefacts ────────────────────────────────
-    text = _clean_ocr_text(text)
-
-    # ── Sentence splitting: punctuation OR newline boundaries ────────────────
-    # This handles both native PDF text (punctuation-terminated) and OCR output
-    # (line-break terminated) without double-counting.
-    sentences = re.split(r'(?<=[.!?])\s+|\n', text.strip())
-    sentences = [s.strip() for s in sentences if s.strip()]
+    # Split into sentences using simple delimiters
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
 
     masc_set, fem_set = set(), set()
-    masculine_found, feminine_found = [], []
+    masculine_found, feminine_found = [] , []
 
     masculine_words = sorted(gender_words["masculine"], key=len, reverse=True)
-    feminine_words  = sorted(gender_words["feminine"],  key=len, reverse=True)
+    feminine_words = sorted(gender_words["feminine"], key=len, reverse=True)
 
-    for sent_text in sentences:
-        # Skip very short fragments (OCR noise: single chars, page numbers, etc.)
-        if len(sent_text.split()) < 2:
-            continue
-
+    for sent in sentences:
+        sent_text = sent.strip()
         sent_lower = sent_text.lower()
         matched_spans = []
 
         def is_overlapping(start, end):
             return any(start < e and end > s for s, e in matched_spans)
 
-        # 🔵 Masculine words
+        # 🔵 Highlight masculine words in blue
         for word in masculine_words:
             pattern = re.compile(rf'\b{re.escape(word)}\b', re.IGNORECASE)
             for match in pattern.finditer(sent_lower):
                 start, end = match.span()
                 if not is_overlapping(start, end):
                     matched_spans.append((start, end))
-                    # Dedup key: same word + same sentence → skip
-                    key = (word.lower(), sent_lower)
+                    key = (word.lower(), sent_text)
                     if key not in masc_set:
                         masc_set.add(key)
                         highlighted = re.sub(
@@ -3531,16 +3462,19 @@ def detect_bias(text):
                             sent_text,
                             flags=re.IGNORECASE
                         )
-                        masculine_found.append({"word": word, "sentence": highlighted})
+                        masculine_found.append({
+                            "word": word,
+                            "sentence": highlighted
+                        })
 
-        # 🔴 Feminine words
+        # 🔴 Highlight feminine words in red
         for word in feminine_words:
             pattern = re.compile(rf'\b{re.escape(word)}\b', re.IGNORECASE)
             for match in pattern.finditer(sent_lower):
                 start, end = match.span()
                 if not is_overlapping(start, end):
                     matched_spans.append((start, end))
-                    key = (word.lower(), sent_lower)
+                    key = (word.lower(), sent_text)
                     if key not in fem_set:
                         fem_set.add(key)
                         highlighted = re.sub(
@@ -3549,10 +3483,13 @@ def detect_bias(text):
                             sent_text,
                             flags=re.IGNORECASE
                         )
-                        feminine_found.append({"word": word, "sentence": highlighted})
+                        feminine_found.append({
+                            "word": word,
+                            "sentence": highlighted
+                        })
 
-    masc  = len(masculine_found)
-    fem   = len(feminine_found)
+    masc = len(masculine_found)
+    fem = len(feminine_found)
     total = masc + fem
     bias_score = min(total / 20, 1.0) if total > 0 else 0.0
 
@@ -6252,7 +6189,7 @@ with tab1:
         "📄 Upload PDF Resumes",
         type=["pdf"],
         accept_multiple_files=True,
-        help="Upload one or more resumes in PDF format (max 5 MB each)."
+        help="Upload one or more resumes in PDF format (max 200MB each)."
     )
 
     if uploaded_files:
