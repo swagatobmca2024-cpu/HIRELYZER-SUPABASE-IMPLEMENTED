@@ -346,27 +346,12 @@ def display_timer(remaining_seconds, expired=False, key_suffix=""):
     seconds = remaining_seconds % 60
 
     if expired or remaining_seconds <= 0:
-        st.markdown("""
-        <div class='timer-display timer-expired' style="
-            background: linear-gradient(135deg, rgba(255, 99, 71, 0.18) 0%, rgba(255, 99, 71, 0.08) 100%);
-            backdrop-filter: blur(15px);
-            -webkit-backdrop-filter: blur(15px);
-            border: 2px solid rgba(255, 99, 71, 0.4);
-            border-radius: 14px;
-            padding: 16px 24px;
-            margin: 20px 0;
-            text-align: center;
-            box-shadow: 0 4px 20px rgba(255, 99, 71, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-        ">
-            <span class='timer-text' style="
-                color: #FF6347;
-                font-size: 1.15em;
-                font-weight: bold;
-                font-family: 'Orbitron', sans-serif;
-                text-shadow: 0 0 18px rgba(255, 99, 71, 0.5);
-            ">⏱️ OTP Expired</span>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(
+            "<div class='timer-display timer-expired' style=\"background:linear-gradient(135deg,rgba(255,99,71,0.18) 0%,rgba(255,99,71,0.08) 100%);backdrop-filter:blur(15px);-webkit-backdrop-filter:blur(15px);border:2px solid rgba(255,99,71,0.4);border-radius:14px;padding:16px 24px;margin:20px 0;text-align:center;box-shadow:0 4px 20px rgba(255,99,71,0.15),inset 0 1px 0 rgba(255,255,255,0.1);\">"
+            "<span class='timer-text' style=\"color:#FF6347;font-size:1.15em;font-weight:bold;font-family:-apple-system,sans-serif;text-shadow:0 0 18px rgba(255,99,71,0.5);\">OTP Expired</span>"
+            "</div>",
+            unsafe_allow_html=True
+        )
     else:
         # Client-side countdown for UX, but server validates on action
         st.components.v1.html(f"""
@@ -982,6 +967,7 @@ h3, .stMarkdown h3 {
     min-height: 46px;
 }
 .slide-message:hover { transform: translateY(-2px); }
+.slide-message svg { display: inline-block !important; flex-shrink: 0; vertical-align: middle; min-width: 16px; min-height: 16px; }
 .slide-message-text { flex: 1; position: relative; z-index: 2; word-wrap: break-word; }
 .success-msg {
     background: linear-gradient(135deg, rgba(52,211,153,0.15) 0%, rgba(52,211,153,0.05) 100%);
@@ -1402,37 +1388,14 @@ if not st.session_state.authenticated:
 
     # -------- Sidebar --------
     with st.sidebar:
-        st.markdown("""
-        <div style="
-            padding: 16px 4px 20px;
-            border-bottom: 1px solid rgba(255,255,255,0.07);
-            margin-bottom: 16px;
-        ">
-            <div style="
-                font-family: var(--font-sans, -apple-system, sans-serif);
-                font-size: 1.1rem;
-                font-weight: 700;
-                letter-spacing: -0.02em;
-                color: #f0f4f8;
-                line-height: 1.2;
-            ">HIRELYZER</div>
-            <div style="
-                font-size: 0.72rem;
-                font-weight: 600;
-                letter-spacing: 0.1em;
-                text-transform: uppercase;
-                color: #38bdf8;
-                margin-top: 3px;
-            ">AI Resume Intelligence</div>
-        </div>
-        <p style="
-            color: #64748b;
-            font-size: 0.8rem;
-            line-height: 1.55;
-            font-family: var(--font-sans, -apple-system, sans-serif);
-            margin-bottom: 16px;
-        ">Transform your career with AI-powered resume analysis, job matching, and smart insights.</p>
-        """, unsafe_allow_html=True)
+        st.markdown(
+            "<div style=\"padding:16px 4px 20px;border-bottom:1px solid rgba(255,255,255,0.07);margin-bottom:16px;\">"
+            "<div style=\"font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:1.1rem;font-weight:700;letter-spacing:-0.02em;color:#f0f4f8;line-height:1.2;\">HIRELYZER</div>"
+            "<div style=\"font-size:0.72rem;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:#38bdf8;margin-top:3px;\">AI Resume Intelligence</div>"
+            "</div>"
+            "<p style=\"color:#64748b;font-size:0.8rem;line-height:1.55;font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin-bottom:16px;\">Transform your career with AI-powered resume analysis, job matching, and smart insights.</p>",
+            unsafe_allow_html=True
+        )
 
         features = [
             ("https://img.icons8.com/fluency/48/resume.png", "Resume Analyzer", "Get feedback, scores, and tips powered by AI along with the biased words detection and rewriting the resume in an inclusive way."),
@@ -2256,28 +2219,18 @@ if not st.session_state.get("authenticated", False):
 
 # ------------------- AFTER LOGIN -------------------
 if st.session_state.get("authenticated"):
-    st.markdown(f"""
-    <div class="welcome-banner">
-        <div>
-            <div class="welcome-title">Welcome back, <span class="welcome-username">{st.session_state.username}</span> 👋</div>
-            <div class="welcome-subtitle">HIRELYZER — AI-Powered Resume Intelligence Platform</div>
-        </div>
-        <div style="display:flex; align-items:center; gap:8px;">
-            <div style="
-                background: linear-gradient(135deg, rgba(52,211,153,0.15) 0%, rgba(52,211,153,0.06) 100%);
-                border: 1px solid rgba(52,211,153,0.25);
-                border-radius: 99px;
-                padding: 5px 14px;
-                font-size: 0.75rem;
-                font-weight: 600;
-                color: #6ee7b7;
-                letter-spacing: 0.04em;
-                text-transform: uppercase;
-                font-family: var(--font-sans);
-            ">● Live</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="welcome-banner">'
+        f'<div>'
+        f'<div class="welcome-title">Welcome back, <span class="welcome-username">{st.session_state.username}</span> 👋</div>'
+        f'<div class="welcome-subtitle">HIRELYZER — AI-Powered Resume Intelligence Platform</div>'
+        f'</div>'
+        f'<div style="display:flex;align-items:center;gap:8px;">'
+        f'<div style="background:linear-gradient(135deg,rgba(52,211,153,0.15) 0%,rgba(52,211,153,0.06) 100%);border:1px solid rgba(52,211,153,0.25);border-radius:99px;padding:5px 14px;font-size:0.75rem;font-weight:600;color:#6ee7b7;letter-spacing:0.04em;text-transform:uppercase;font-family:-apple-system,sans-serif;">&#9679; Live</div>'
+        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
 
     # 🔓 LOGOUT BUTTON
     if st.button("🚪 Logout"):
@@ -2291,19 +2244,10 @@ if st.session_state.get("authenticated"):
         st.rerun()  # Force rerun to prevent stale UI
 
     # 🔑 GROQ API KEY SECTION (SIDEBAR)
-    st.sidebar.markdown("""
-    <p style='
-        font-size: 0.72rem;
-        font-weight: 700;
-        letter-spacing: 0.10em;
-        text-transform: uppercase;
-        color: #4a5568;
-        border-bottom: 1px solid rgba(255,255,255,0.06);
-        padding-bottom: 8px;
-        margin-bottom: 12px;
-        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
-    '>🔑 Groq API Key</p>
-    """, unsafe_allow_html=True)
+    st.sidebar.markdown(
+        "<p style='font-size:0.72rem;font-weight:700;letter-spacing:0.10em;text-transform:uppercase;color:#4a5568;border-bottom:1px solid rgba(255,255,255,0.06);padding-bottom:8px;margin-bottom:12px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;'>Groq API Key</p>",
+        unsafe_allow_html=True
+    )
 
     # ✅ Load saved key from DB (cached — won't re-query on every rerun)
     saved_key = _cached_user_api_key(st.session_state.username)
@@ -2670,7 +2614,10 @@ def ensure_nltk():
     return WordNetLemmatizer()
 
 lemmatizer = ensure_nltk()
-reader = get_easyocr_reader()
+# EasyOCR reader is intentionally NOT loaded here at module startup.
+# It is loaded lazily inside extract_text_from_images() only when a
+# partially-scanned PDF is encountered. This prevents the ~500 MB model
+# from being pulled on every cold start and avoids OOM on Streamlit Cloud.
 
 def generate_docx(text, filename="bias_free_resume.docx"):
     doc = Document()
@@ -2798,7 +2745,267 @@ def _extract_page_text_smart(page) -> str:
     return "\n".join(b[4].strip() for b in all_sorted)
 
 
-def extract_text_from_pdf(file_path):
+# ============================================================
+# 🔍 Scanned PDF Detection — Multi-Signal Engine
+# ============================================================
+
+# Sentinel returned by safe_extract_text when file is image-only
+_SCANNED_SENTINEL = "__SCANNED_PDF__"
+
+def _classify_pdf(file_path: str) -> dict:
+    """
+    Multi-signal classifier that determines whether a PDF is text-based
+    or image/scan-based. Returns a dict with keys:
+      - is_scanned     : bool   — True if PDF is image-only
+      - confidence     : str    — 'definite' | 'likely' | 'uncertain'
+      - page_count     : int
+      - text_pages     : int    — pages with meaningful text (≥40 words)
+      - image_only_pages: int   — pages with embedded images but no text
+      - total_words    : int    — total word count across all pages
+      - file_size_mb   : float
+      - signals        : list   — human-readable evidence list
+
+    Detection uses FOUR independent signals so no single edge case can
+    misclassify a real text-based resume as scanned:
+
+    Signal 1 — Text density per page via PyMuPDF get_text()
+      A real resume page has ≥40 recognisable words. Fewer means the
+      page either has no text layer or the text is in images.
+
+    Signal 2 — Image-block ratio via get_text("dict") block analysis
+      Counts how many blocks on a page are image-type (type == 1) vs
+      text-type (type == 0). Scanned PDFs are 100% image blocks.
+
+    Signal 3 — Character confidence heuristic
+      OCR-produced or truly embedded text has normal char distribution.
+      Random symbol dumps (mojibake from scanned-then-OCR'd PDFs) have
+      high ratio of non-ASCII or non-printable chars → flagged.
+
+    Signal 4 — Embedded font check
+      Text-based PDFs always embed at least one font. A PDF with zero
+      embedded fonts across all pages has no real text layer.
+    """
+    signals = []
+    result = {
+        "is_scanned": False,
+        "confidence": "uncertain",
+        "page_count": 0,
+        "text_pages": 0,
+        "image_only_pages": 0,
+        "total_words": 0,
+        "file_size_mb": 0.0,
+        "signals": signals,
+    }
+
+    try:
+        result["file_size_mb"] = round(os.path.getsize(file_path) / (1024 * 1024), 2)
+        doc = fitz.open(file_path)
+        page_count = doc.page_count
+        result["page_count"] = page_count
+
+        text_pages       = 0
+        image_only_pages = 0
+        total_words      = 0
+        total_fonts      = 0
+        high_noise_pages = 0
+
+        for page in doc:
+            # ── Signal 1: text density ────────────────────────────────────
+            raw_text  = page.get_text("text") or ""
+            words     = [w for w in raw_text.split() if len(w) > 1]
+            word_count = len(words)
+            total_words += word_count
+
+            if word_count >= 40:
+                text_pages += 1
+            else:
+                # ── Signal 2: image-block ratio ───────────────────────────
+                page_dict   = page.get_text("dict")
+                all_blocks  = page_dict.get("blocks", [])
+                img_blocks  = [b for b in all_blocks if b.get("type") == 1]
+                text_blocks = [b for b in all_blocks if b.get("type") == 0
+                               and any(
+                                   span.get("text", "").strip()
+                                   for line in b.get("lines", [])
+                                   for span in line.get("spans", [])
+                               )]
+                if img_blocks and not text_blocks:
+                    image_only_pages += 1
+                    signals.append(f"Page {page.number + 1}: image-only block (no text layer)")
+
+            # ── Signal 3: character noise ratio ──────────────────────────
+            if word_count > 5:
+                total_chars  = len(raw_text)
+                noise_chars  = sum(
+                    1 for c in raw_text
+                    if ord(c) > 127 or (ord(c) < 32 and c not in "\n\r\t")
+                )
+                noise_ratio  = noise_chars / max(total_chars, 1)
+                if noise_ratio > 0.15:
+                    high_noise_pages += 1
+
+            # ── Signal 4: embedded font check ─────────────────────────────
+            font_list = page.get_fonts(full=False)
+            total_fonts += len(font_list)
+
+        doc.close()
+
+        result["text_pages"]        = text_pages
+        result["image_only_pages"]  = image_only_pages
+        result["total_words"]       = total_words
+
+        # ── Decision logic (multi-signal voting) ─────────────────────────
+        text_page_ratio  = text_pages / max(page_count, 1)
+        image_page_ratio = image_only_pages / max(page_count, 1)
+
+        # DEFINITE scanned: zero readable text pages + image blocks present
+        if text_pages == 0 and image_only_pages > 0:
+            result["is_scanned"]  = True
+            result["confidence"]  = "definite"
+            signals.append(f"Zero text pages found; {image_only_pages}/{page_count} page(s) are pure image blocks")
+
+        # DEFINITE scanned: no text at all and no embedded fonts
+        elif total_words < 30 and total_fonts == 0:
+            result["is_scanned"]  = True
+            result["confidence"]  = "definite"
+            signals.append(f"Only {total_words} words found and zero embedded fonts — no text layer")
+
+        # LIKELY scanned: very low text coverage across majority of pages
+        elif text_page_ratio < 0.30 and image_page_ratio >= 0.50:
+            result["is_scanned"]  = True
+            result["confidence"]  = "likely"
+            signals.append(
+                f"Only {text_pages}/{page_count} pages have ≥40 words; "
+                f"{image_only_pages} page(s) are image-only"
+            )
+
+        # UNCERTAIN: some text but very low total word count with images present
+        elif total_words < 80 and image_only_pages > 0:
+            result["is_scanned"]  = True
+            result["confidence"]  = "uncertain"
+            signals.append(
+                f"Low word count ({total_words} total) with image-only pages — "
+                "likely partially scanned"
+            )
+
+        else:
+            result["is_scanned"]  = False
+            result["confidence"]  = "definite"
+            signals.append(
+                f"Text-based PDF confirmed: {text_pages}/{page_count} pages readable, "
+                f"{total_words} total words"
+            )
+
+    except Exception as e:
+        signals.append(f"Classifier error: {e}")
+        result["confidence"] = "uncertain"
+
+    return result
+
+
+def _render_scanned_rejection_card(filename: str, classification: dict, container=None):
+    """
+    Renders an industry-standard rejection card for scanned/image PDFs.
+    Matches the app's existing glassmorphism dark theme exactly.
+    Shows classification evidence so the user understands why their file failed.
+    """
+    # SVG dot icon per confidence tier — replaces colored circle emojis
+    _dot_svg = {
+        "definite":  '<svg width="9" height="9" viewBox="0 0 9 9" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;margin-top:1px;"><circle cx="4.5" cy="4.5" r="4.5" fill="#fb7185"/></svg>',
+        "likely":    '<svg width="9" height="9" viewBox="0 0 9 9" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;margin-top:1px;"><circle cx="4.5" cy="4.5" r="4.5" fill="#fb923c"/></svg>',
+        "uncertain": '<svg width="9" height="9" viewBox="0 0 9 9" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;margin-top:1px;"><circle cx="4.5" cy="4.5" r="4.5" fill="#fbbf24"/></svg>',
+    }
+
+    confidence_label = {
+        "definite":  ("Unreadable — Image-Only PDF",        "#fb7185", "rgba(251,113,133,0.18)", "rgba(251,113,133,0.35)"),
+        "likely":    ("Likely Scanned — Low Text Coverage",  "#fb923c", "rgba(251,146, 60,0.18)", "rgba(251,146, 60,0.35)"),
+        "uncertain": ("Partially Scanned — Low Text Quality","#fbbf24", "rgba(251,191, 36,0.18)", "rgba(251,191, 36,0.35)"),
+    }.get(
+        classification["confidence"],
+        ("Scan Quality Issue", "#fbbf24", "rgba(251,191,36,0.18)", "rgba(251,191,36,0.35)")
+    )
+
+    dot_svg     = _dot_svg.get(classification["confidence"], _dot_svg["uncertain"])
+    badge_text, text_color, bg_color, border_color = confidence_label
+    page_count  = classification.get("page_count", "?")
+    total_words = classification.get("total_words", 0)
+    file_size   = classification.get("file_size_mb", 0)
+    signals     = classification.get("signals", [])
+
+    # Build evidence bullet list — SVG bullet marker instead of default disc
+    _bullet = '<svg width="6" height="6" viewBox="0 0 6 6" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;margin-top:5px;"><circle cx="3" cy="3" r="3" fill="#475569"/></svg>'
+    evidence_html = "".join(
+        f"<li style='display:flex;align-items:flex-start;gap:8px;margin-bottom:6px;list-style:none;'>"
+        f"{_bullet}"
+        f"<span>{s}</span></li>"
+        for s in signals[:4]
+    )
+
+    # SVG icons for stat pills
+    _svg_pages = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'
+    _svg_text  = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><line x1="17" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="17" y1="18" x2="3" y2="18"/></svg>'
+    _svg_disk  = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>'
+
+    # SVG icon for header — image/scan concept (image frame with slash)
+    _svg_header = '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/><line x1="2" y1="2" x2="22" y2="22" stroke="{c}" stroke-width="1.5"/></svg>'.replace("{c}", text_color)
+
+    # SVG icons for "How to Fix" section labels
+    _svg_fix_word  = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#7dd3fc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:3px;"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>'
+    _svg_fix_export= '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#7dd3fc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:3px;"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>'
+    _svg_fix_scan  = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#7dd3fc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:3px;"><line x1="2" y1="2" x2="22" y2="22"/><path d="M10.58 10.58A2 2 0 0013 13"/><path d="M17.94 17.94A10 10 0 013.34 7.34"/></svg>'
+    _svg_fix_acro  = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#7dd3fc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:3px;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
+
+    fix_items = [
+        (_svg_fix_word,   "Open your resume in <strong>Microsoft Word or Google Docs</strong>"),
+        (_svg_fix_export, "Export / Download as <strong>PDF</strong> — this creates a text-layer PDF"),
+        (_svg_fix_scan,   "Avoid scanning a printed resume — use the original digital file"),
+        (_svg_fix_acro,   "If you only have a scanned copy, use <strong>Adobe Acrobat → OCR → Save as PDF</strong>"),
+    ]
+    fix_html = "".join(
+        f"<li style='display:flex;align-items:flex-start;gap:8px;margin-bottom:8px;list-style:none;'>"
+        f"{icon}<span>{text}</span></li>"
+        for icon, text in fix_items
+    )
+
+    # SVG icons for section header labels (evidence / how to fix)
+    _svg_label_evidence = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
+    _svg_label_fix      = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>'
+
+    card_html = (
+        f'<div style="background:linear-gradient(135deg,{bg_color} 0%,rgba(0,0,0,0) 100%);border:1px solid {border_color};border-radius:16px;padding:22px 24px;margin:14px 0;backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);box-shadow:0 8px 32px rgba(0,0,0,0.3),inset 0 1px 0 rgba(255,255,255,0.06);font-family:-apple-system,BlinkMacSystemFont,sans-serif;position:relative;overflow:hidden;">'
+        f'<div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,transparent,{text_color},transparent);opacity:0.6;"></div>'
+        f'<div style="display:flex;align-items:flex-start;gap:14px;margin-bottom:16px;">'
+        f'<div style="width:44px;height:44px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.09);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">{_svg_header}</div>'
+        f'<div style="flex:1;">'
+        f'<div style="display:flex;align-items:center;gap:6px;font-size:0.72rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:{text_color};margin-bottom:4px;">{dot_svg}{badge_text}</div>'
+        f'<div style="font-size:1rem;font-weight:600;color:#f0f4f8;word-break:break-all;">{filename}</div>'
+        f'</div></div>'
+        f'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">'
+        f'<div style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.09);border-radius:8px;padding:6px 12px;font-size:0.78rem;color:#94a3b8;">{_svg_pages} {page_count} page{"s" if page_count != 1 else ""}</div>'
+        f'<div style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.09);border-radius:8px;padding:6px 12px;font-size:0.78rem;color:#94a3b8;">{_svg_text} {total_words} words detected</div>'
+        f'<div style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.09);border-radius:8px;padding:6px 12px;font-size:0.78rem;color:#94a3b8;">{_svg_disk} {file_size} MB</div>'
+        f'</div>'
+        f'<div style="background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:12px 16px;margin-bottom:16px;">'
+        f'<div style="display:flex;align-items:center;gap:6px;font-size:0.72rem;font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:#64748b;margin-bottom:10px;">{_svg_label_evidence} Detection Evidence</div>'
+        f'<ul style="margin:0;padding:0;color:#94a3b8;font-size:0.82rem;line-height:1.6;">{evidence_html}</ul>'
+        f'</div>'
+        f'<div style="background:rgba(56,189,248,0.07);border:1px solid rgba(56,189,248,0.18);border-radius:10px;padding:12px 16px;">'
+        f'<div style="display:flex;align-items:center;gap:6px;font-size:0.72rem;font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:#38bdf8;margin-bottom:10px;">{_svg_label_fix} How to Fix This</div>'
+        f'<ul style="margin:0;padding:0;color:#7dd3fc;font-size:0.82rem;line-height:1.8;">{fix_html}</ul>'
+        f'</div>'
+        f'</div>'
+    )
+    _render_target = container if container is not None else st
+    _render_target.markdown(card_html, unsafe_allow_html=True)
+
+
+def extract_text_from_pdf(file_path: str):
+    """
+    Extracts text from a PDF using PyMuPDF smart extraction.
+    Returns list of page text strings, or empty list if nothing found.
+    Does NOT fall through to OCR — scanned detection is handled upstream
+    by _classify_pdf() + safe_extract_text().
+    """
     try:
         doc = fitz.open(file_path)
         text_list = []
@@ -2807,36 +3014,99 @@ def extract_text_from_pdf(file_path):
             if page_text.strip():
                 text_list.append(page_text)
         doc.close()
-        return text_list if text_list else extract_text_from_images(file_path)
+        return text_list
     except Exception as e:
         st.error(f"⚠ Error extracting text: {e}")
         return []
 
+
 def extract_text_from_images(pdf_path):
+    """
+    OCR fallback using EasyOCR — only called when explicitly requested
+    and classification confidence is 'uncertain' (partial scan).
+    EasyOCR reader is loaded lazily here, not at module startup.
+    """
     try:
-        images = convert_from_path(pdf_path, dpi=150, first_page=1, last_page=5)
-        return ["\n".join(reader.readtext(np.array(img), detail=0)) for img in images]
+        _reader = get_easyocr_reader()
+        images = convert_from_path(pdf_path, dpi=120, first_page=1, last_page=3)
+        results = []
+        for img in images:
+            try:
+                page_text = "\n".join(_reader.readtext(np.array(img), detail=0))
+                if page_text.strip():
+                    results.append(page_text)
+            except Exception:
+                continue
+        return results
     except Exception as e:
         st.error(f"⚠ Error extracting from image: {e}")
         return []
 
-def safe_extract_text(uploaded_file):
+
+def safe_extract_text(uploaded_file, container=None):
     """
-    Safely extracts text from uploaded file.
-    Prevents app crash if file is not a resume or unreadable.
+    Main entry point for PDF text extraction.
+
+    Flow:
+      1. Write file to /tmp
+      2. Run _classify_pdf() — multi-signal scanned detector
+      3. If DEFINITE scanned  → render rejection card, return sentinel
+      4. If LIKELY scanned    → render rejection card, return sentinel
+      5. If UNCERTAIN         → attempt OCR, return text if usable or sentinel
+      6. If text-based        → extract with PyMuPDF, return text
+      7. If extracted text is still empty after all attempts → warn, return None
+
+    Returns:
+      str   — extracted resume text (usable)
+      _SCANNED_SENTINEL — file is image-based, rejection card already shown
+      None  — file is unreadable for an unknown reason
     """
     try:
-        # Save uploaded file to a temp location
         temp_path = f"/tmp/{uploaded_file.name}"
         with open(temp_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
 
-        # Try PDF text extraction
+        # ── Step 1: classify the PDF ──────────────────────────────────────
+        classification = _classify_pdf(temp_path)
+
+        # ── Step 2: handle scanned/image PDFs ────────────────────────────
+        if classification["is_scanned"]:
+            confidence = classification["confidence"]
+
+            if confidence in ("definite", "likely"):
+                # Hard reject — no OCR attempt, show full rejection card
+                _render_scanned_rejection_card(uploaded_file.name, classification, container=container)
+                return _SCANNED_SENTINEL
+
+            else:
+                # Uncertain — try OCR as last resort
+                ocr_text_list = extract_text_from_images(temp_path)
+                if ocr_text_list:
+                    ocr_text = "\n".join(ocr_text_list)
+                    ocr_words = len([w for w in ocr_text.split() if len(w) > 1])
+                    if ocr_words >= 60:
+                        # OCR gave enough signal — usable but warn the user
+                        _render_target = container if container is not None else st
+                        _render_target.markdown(f"""
+                        <div class='slide-message warn-msg'>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                            <b>{uploaded_file.name}</b> appears partially scanned.
+                            Analysis is based on OCR text ({ocr_words} words) — accuracy may be reduced.
+                            For best results, upload a text-based PDF.
+                        </div>
+                        """, unsafe_allow_html=True)
+                        return ocr_text
+
+                # OCR gave too little — show rejection card
+                _render_scanned_rejection_card(uploaded_file.name, classification, container=container)
+                return _SCANNED_SENTINEL
+
+        # ── Step 3: text-based PDF — normal extraction ────────────────────
         text_list = extract_text_from_pdf(temp_path)
 
-        # If nothing readable found
         if not text_list or all(len(t.strip()) == 0 for t in text_list):
-            st.warning("⚠️ This file doesn't look like a resume or contains no readable text.")
+            _render_target = container if container is not None else st
+            _render_target.warning("⚠️ This file doesn't look like a resume or contains no readable text.")
             return None
 
         return "\n".join(text_list)
@@ -3579,6 +3849,8 @@ ABSOLUTE RULES — NEVER VIOLATE:
 • DO NOT use personal pronouns (I, my, me, we, our) anywhere.
 • DO NOT repeat the same phrase or word across multiple sections.
 • EVERY section must contain unique, non-overlapping content.
+• DO NOT exaggerate experience level. If the candidate has no work experience or is a fresher/student, the summary MUST use honest framing: "Aspiring", "Entry-level", "Recent graduate", or "Seeking first role in...". NEVER use "seasoned", "veteran", "proven track record", or imply years of experience that do not exist in the resume.
+• PROFESSIONAL SUMMARY must reflect ONLY what is actually present in the resume. Do not upgrade a fresher to a professional or a junior to a senior.
 
 YOU MAY:
 ✓ Strengthen bullet points with stronger action verbs and tighter phrasing.
@@ -3592,10 +3864,16 @@ Work Experience → Projects → Education → Certifications & Links
 
 CONTACT HEADER: Full Name | Job Title | Email | Phone | Location | LinkedIn URL | GitHub/Portfolio URL
 
-PROFESSIONAL SUMMARY (2–3 sentences, max 60 words):
-  Sentence 1: [Seniority level] + [core domain] + [years of experience]
-  Sentence 2: [Top 2–3 specific technical or functional strengths]
-  Sentence 3: [Career value proposition — what the candidate delivers]
+PROFESSIONAL SUMMARY (2–3 sentences, max 80 words):
+  FIRST — assess the candidate's actual experience level from the resume:
+  • No experience / student / fresher → use "Aspiring [Role]" or "Recent [Degree] graduate"
+  • 0–2 years → "Entry-level" or "Junior"
+  • 2–5 years → "Mid-level" or just state domain + years honestly
+  • 5+ years → "Senior" or "Lead" only if the resume clearly supports it
+
+  Sentence 1: [Honest seniority label] + [core domain] + [years of experience IF present, else omit]
+  Sentence 2: [Top 2–3 specific technical or functional strengths from the resume]
+  Sentence 3: [What the candidate brings or is seeking — honest career value proposition]
 
 CORE SKILLS: labeled lines — Technical Skills: [...] and Professional Skills: [...]
 
@@ -3613,7 +3891,8 @@ PROJECTS: Name | Tech Stack | Duration
   • [Achievement bullet with action verb and metric]
   (3–5 bullets)
 
-EDUCATION: Degree, Major | Institution | Graduation Year
+EDUCATION: Degree, Major | Institution | Graduation Year | CGPA (if present, e.g. "8.5/10")
+  • Include honors, distinctions, or relevant coursework if mentioned in the original resume.
 CERTIFICATIONS: • Name | Issuing Body | MMM YYYY
 
 ATS FORMATTING:
@@ -3683,6 +3962,7 @@ RETURN ONLY THIS EXACT JSON STRUCTURE:
       "degree": "",
       "institution": "",
       "year": "",
+      "cgpa": "",
       "bullets": []
     }}
   ],
@@ -3706,10 +3986,12 @@ FIELD RULES:
 - "skills" = flat array of individual skill strings. Minimum 8. No duplicates.
 - "soft_skills" = professional competency phrases. Must NOT duplicate items in "skills".
 - "contact.*" = extract exactly as written. Use "" not null for missing fields.
-- "summary" = 2–3 sentences, max 60 words, no pronouns.
+- "summary" = 2–3 sentences, max 80 words, no pronouns. Must be the COMPLETE summary — do NOT truncate mid-sentence. MUST reflect actual experience level: freshers get "Aspiring/Entry-level", never "experienced professional" or fabricated years of experience.
 - "experience[].description" = 1-sentence role scope, unique from bullets.
 - "experience[].bullets" = 3–5 bullets each. Strong verb + task + tech + impact.
 - "projects[].bullets" = must NOT restate experience bullets.
+- "education[].cgpa" = extract CGPA/GPA exactly as written (e.g., "8.5/10", "3.9/4.0", "First Class"). Use "" if not present.
+- "education[].bullets" = include honors, distinctions, or relevant coursework if mentioned. Use [] if none.
 - "additional" items MUST use object format: {{"name":"","description":"","duration":""}}.
 - Missing fields: use "[Not Provided]" for text, [] for arrays.
 
@@ -3924,7 +4206,7 @@ def extract_resume_json(llm_response: str) -> dict:
                 proj["bullets"] = []
         # Backfill missing education fields
         for edu in data.get("education", []):
-            for f in ["degree", "institution", "year"]:
+            for f in ["degree", "institution", "year", "cgpa"]:
                 if f not in edu:
                     edu[f] = ""
             if "bullets" not in edu:
@@ -4122,6 +4404,74 @@ def _section_heading_bordered(doc, text: str, font_name: str,
     p.paragraph_format.space_before = Pt(space_before)
     p.paragraph_format.space_after = Pt(space_after)
     return p
+
+
+def _add_hyperlink(paragraph, url: str, display_text: str, font_name: str = "Calibri",
+                   font_size: int = 10, color_rgb: tuple = (0, 112, 192), underline: bool = True):
+    """
+    Add a real clickable hyperlink run to an existing paragraph in a python-docx document.
+    Uses OOXML relationship injection — works in Word, LibreOffice, and Google Docs.
+    """
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    import re
+
+    # Sanitise URL — ensure it has a scheme
+    url = url.strip()
+    if url and not re.match(r"https?://", url, re.IGNORECASE):
+        url = "https://" + url
+
+    part = paragraph.part
+    r_id = part.relate_to(url, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink", is_external=True)
+
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("r:id"), r_id)
+
+    new_run = OxmlElement("w:r")
+    rPr = OxmlElement("w:rPr")
+
+    # Font name
+    rFonts = OxmlElement("w:rFonts")
+    rFonts.set(qn("w:ascii"), font_name)
+    rFonts.set(qn("w:hAnsi"), font_name)
+    rPr.append(rFonts)
+
+    # Font size (half-points)
+    sz = OxmlElement("w:sz")
+    sz.set(qn("w:val"), str(font_size * 2))
+    rPr.append(sz)
+    szCs = OxmlElement("w:szCs")
+    szCs.set(qn("w:val"), str(font_size * 2))
+    rPr.append(szCs)
+
+    # Color
+    color_el = OxmlElement("w:color")
+    hex_color = "{:02X}{:02X}{:02X}".format(*color_rgb)
+    color_el.set(qn("w:val"), hex_color)
+    rPr.append(color_el)
+
+    # Underline
+    if underline:
+        u = OxmlElement("w:u")
+        u.set(qn("w:val"), "single")
+        rPr.append(u)
+
+    # Style override to prevent default hyperlink style from overriding color
+    rStyle = OxmlElement("w:rStyle")
+    rStyle.set(qn("w:val"), "Hyperlink")
+    rPr.insert(0, rStyle)
+
+    new_run.append(rPr)
+
+    # Text
+    t = OxmlElement("w:t")
+    t.text = display_text
+    t.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+    new_run.append(t)
+
+    hyperlink.append(new_run)
+    paragraph._p.append(hyperlink)
+    return hyperlink
 
 
 def _add_bullet(doc, text: str, font_size: int = 10, font_name: str = "Arial",
@@ -4521,19 +4871,24 @@ def generate_modern_docx(data: dict) -> BytesIO:
                 r_dur.font.color.rgb = RGBColor(110, 110, 110)
             p.paragraph_format.space_before = Pt(6)
             p.paragraph_format.space_after = Pt(1)
-            # Line 2: Tech Stack + URL (plain text, ATS-safe)
-            meta_parts = []
-            if proj.get("tech_stack") and proj["tech_stack"] not in ("", "[Not Provided]"):
-                meta_parts.append(f"Tech: {proj['tech_stack']}")
-            if proj.get("url") and proj["url"] not in ("", "[Not Provided]"):
-                meta_parts.append(proj["url"])
-            if meta_parts:
+            # Line 2: Tech Stack (plain text) + URL (clickable hyperlink)
+            has_tech = proj.get("tech_stack") and proj["tech_stack"] not in ("", "[Not Provided]")
+            has_url  = proj.get("url") and proj["url"] not in ("", "[Not Provided]")
+            if has_tech or has_url:
                 p_meta = doc.add_paragraph()
                 p_meta.clear()
-                r_meta = p_meta.add_run("  |  ".join(meta_parts))
-                r_meta.font.size = Pt(BODY - 1)
-                r_meta.font.name = FONT
-                r_meta.font.color.rgb = RGBColor(74, 74, 74)
+                if has_tech:
+                    r_tech = p_meta.add_run(f"Tech: {proj['tech_stack']}")
+                    r_tech.font.size = Pt(BODY - 1)
+                    r_tech.font.name = FONT
+                    r_tech.font.color.rgb = RGBColor(74, 74, 74)
+                if has_tech and has_url:
+                    sep = p_meta.add_run("  |  ")
+                    sep.font.size = Pt(BODY - 1)
+                    sep.font.name = FONT
+                    sep.font.color.rgb = RGBColor(74, 74, 74)
+                if has_url:
+                    _add_hyperlink(p_meta, proj["url"], proj["url"], font_name=FONT, font_size=BODY - 1, color_rgb=(0, 102, 204))
                 p_meta.paragraph_format.space_before = Pt(0)
                 p_meta.paragraph_format.space_after = Pt(2)
             if proj.get("description") and proj["description"] not in ("", "[Not Provided]"):
@@ -4577,6 +4932,15 @@ def generate_modern_docx(data: dict) -> BytesIO:
                 r_yr.font.color.rgb = RGBColor(110, 110, 110)
                 p_yr.paragraph_format.space_before = Pt(0)
                 p_yr.paragraph_format.space_after = Pt(2)
+            if edu.get("cgpa") and edu["cgpa"] not in ("", "[Not Provided]"):
+                p_cgpa = doc.add_paragraph()
+                p_cgpa.clear()
+                r_cgpa = p_cgpa.add_run(f"CGPA: {edu['cgpa']}")
+                r_cgpa.font.size = Pt(BODY - 1)
+                r_cgpa.font.name = FONT
+                r_cgpa.font.color.rgb = RGBColor(80, 80, 80)
+                p_cgpa.paragraph_format.space_before = Pt(0)
+                p_cgpa.paragraph_format.space_after = Pt(2)
             for b in (edu.get("bullets") or []):
                 if b and b != "[Not Provided]":
                     _add_bullet(doc, b, font_size=BODY - 1, font_name=FONT)
@@ -4601,11 +4965,20 @@ def generate_modern_docx(data: dict) -> BytesIO:
             if cert.get("duration") and cert["duration"] not in ("", "[Not Provided]"):
                 parts.append(cert["duration"])
             _add_bullet(doc, "  |  ".join(parts), font_size=BODY, font_name=FONT)
-        # Profile links as plain-text bullets (ATS-safe)
+        # Profile links as real clickable hyperlinks
         for label, key in [("LinkedIn", "linkedin"), ("GitHub", "github"), ("Portfolio", "portfolio")]:
             val = contact.get(key, "")
             if val and val not in ("", "[Not Provided]", "Not Provided"):
-                _add_bullet(doc, f"{label}: {val}", font_size=BODY, font_name=FONT)
+                p_link = doc.add_paragraph()
+                p_link.paragraph_format.left_indent = Pt(0)
+                p_link.paragraph_format.space_before = Pt(2)
+                p_link.paragraph_format.space_after = Pt(2)
+                label_run = p_link.add_run(f"{label}: ")
+                label_run.bold = True
+                label_run.font.size = Pt(BODY)
+                label_run.font.name = FONT
+                label_run.font.color.rgb = RGBColor(*NAVY)
+                _add_hyperlink(p_link, val, val, font_name=FONT, font_size=BODY, color_rgb=(0, 102, 204))
 
     # ══════════════════════════════════════════════════════════════════════
     # SECTION 7: LANGUAGES
@@ -4812,19 +5185,24 @@ def generate_minimal_docx(data: dict) -> BytesIO:
                 rd.font.color.rgb = RGBColor(*MID_GRAY)
             p.paragraph_format.space_before = Pt(6)
             p.paragraph_format.space_after = Pt(1)
-            # Line 2: Tech Stack + URL
-            meta_parts = []
-            if proj.get("tech_stack") and proj["tech_stack"] not in ("", "[Not Provided]"):
-                meta_parts.append(f"Tech: {proj['tech_stack']}")
-            if proj.get("url") and proj["url"] not in ("", "[Not Provided]"):
-                meta_parts.append(proj["url"])
-            if meta_parts:
+            # Line 2: Tech Stack (plain) + URL (clickable hyperlink)
+            has_tech = proj.get("tech_stack") and proj["tech_stack"] not in ("", "[Not Provided]")
+            has_url  = proj.get("url") and proj["url"] not in ("", "[Not Provided]")
+            if has_tech or has_url:
                 p_meta = doc.add_paragraph()
                 p_meta.clear()
-                r_meta = p_meta.add_run("  |  ".join(meta_parts))
-                r_meta.font.size = Pt(BODY - 1)
-                r_meta.font.name = FONT
-                r_meta.font.color.rgb = RGBColor(*DARK_GRAY)
+                if has_tech:
+                    r_tech = p_meta.add_run(f"Tech: {proj['tech_stack']}")
+                    r_tech.font.size = Pt(BODY - 1)
+                    r_tech.font.name = FONT
+                    r_tech.font.color.rgb = RGBColor(*DARK_GRAY)
+                if has_tech and has_url:
+                    sep = p_meta.add_run("  |  ")
+                    sep.font.size = Pt(BODY - 1)
+                    sep.font.name = FONT
+                    sep.font.color.rgb = RGBColor(*DARK_GRAY)
+                if has_url:
+                    _add_hyperlink(p_meta, proj["url"], proj["url"], font_name=FONT, font_size=BODY - 1, color_rgb=(0, 0, 0))
                 p_meta.paragraph_format.space_before = Pt(0)
                 p_meta.paragraph_format.space_after = Pt(2)
             if proj.get("description") and proj["description"] not in ("", "[Not Provided]"):
@@ -4867,6 +5245,15 @@ def generate_minimal_docx(data: dict) -> BytesIO:
                 r_yr.font.color.rgb = RGBColor(*MID_GRAY)
                 p_yr.paragraph_format.space_before = Pt(0)
                 p_yr.paragraph_format.space_after = Pt(2)
+            if edu.get("cgpa") and edu["cgpa"] not in ("", "[Not Provided]"):
+                p_cgpa = doc.add_paragraph()
+                p_cgpa.clear()
+                r_cgpa = p_cgpa.add_run(f"CGPA: {edu['cgpa']}")
+                r_cgpa.font.size = Pt(BODY - 1)
+                r_cgpa.font.name = FONT
+                r_cgpa.font.color.rgb = RGBColor(80, 80, 80)
+                p_cgpa.paragraph_format.space_before = Pt(0)
+                p_cgpa.paragraph_format.space_after = Pt(2)
             for b in (edu.get("bullets") or []):
                 if b and b != "[Not Provided]":
                     _add_bullet(doc, b, font_size=BODY - 1, font_name=FONT)
@@ -4893,7 +5280,14 @@ def generate_minimal_docx(data: dict) -> BytesIO:
         for label, key in [("LinkedIn", "linkedin"), ("GitHub", "github"), ("Portfolio", "portfolio")]:
             val = contact_min.get(key, "")
             if val and val not in ("", "[Not Provided]", "Not Provided"):
-                _add_bullet(doc, f"{label}: {val}", font_size=BODY, font_name=FONT)
+                p_link = doc.add_paragraph()
+                p_link.paragraph_format.space_before = Pt(2)
+                p_link.paragraph_format.space_after = Pt(2)
+                label_run = p_link.add_run(f"{label}: ")
+                label_run.bold = True
+                label_run.font.size = Pt(BODY)
+                label_run.font.name = FONT
+                _add_hyperlink(p_link, val, val, font_name=FONT, font_size=BODY, color_rgb=(0, 0, 0))
 
     # ══════════════════════════════════════════════════════════════════════
     # SECTION 7: LANGUAGES
@@ -5114,19 +5508,24 @@ def generate_creative_docx(data: dict) -> BytesIO:
                 rd.font.color.rgb = RGBColor(110, 110, 110)
             p.paragraph_format.space_before = Pt(6)
             p.paragraph_format.space_after = Pt(1)
-            # Line 2: Tech + URL (plain text, teal color — no underline/hyperlink)
-            meta_parts = []
-            if proj.get("tech_stack") and proj["tech_stack"] not in ("", "[Not Provided]"):
-                meta_parts.append(f"Tech: {proj['tech_stack']}")
-            if proj.get("url") and proj["url"] not in ("", "[Not Provided]"):
-                meta_parts.append(proj["url"])
-            if meta_parts:
+            # Line 2: Tech (teal plain text) + URL (clickable hyperlink)
+            has_tech = proj.get("tech_stack") and proj["tech_stack"] not in ("", "[Not Provided]")
+            has_url  = proj.get("url") and proj["url"] not in ("", "[Not Provided]")
+            if has_tech or has_url:
                 p_meta = doc.add_paragraph()
                 p_meta.clear()
-                r_meta = p_meta.add_run("  |  ".join(meta_parts))
-                r_meta.font.size = Pt(BODY - 1)
-                r_meta.font.name = FONT_BODY
-                r_meta.font.color.rgb = RGBColor(*TEAL)
+                if has_tech:
+                    r_tech = p_meta.add_run(f"Tech: {proj['tech_stack']}")
+                    r_tech.font.size = Pt(BODY - 1)
+                    r_tech.font.name = FONT_BODY
+                    r_tech.font.color.rgb = RGBColor(*TEAL)
+                if has_tech and has_url:
+                    sep = p_meta.add_run("  |  ")
+                    sep.font.size = Pt(BODY - 1)
+                    sep.font.name = FONT_BODY
+                    sep.font.color.rgb = RGBColor(*TEAL)
+                if has_url:
+                    _add_hyperlink(p_meta, proj["url"], proj["url"], font_name=FONT_BODY, font_size=BODY - 1, color_rgb=(0, 128, 128))
                 p_meta.paragraph_format.space_before = Pt(0)
                 p_meta.paragraph_format.space_after = Pt(2)
             if proj.get("description") and proj["description"] not in ("", "[Not Provided]"):
@@ -5169,6 +5568,15 @@ def generate_creative_docx(data: dict) -> BytesIO:
                 r3.font.color.rgb = RGBColor(110, 110, 110)
                 p_yr.paragraph_format.space_before = Pt(0)
                 p_yr.paragraph_format.space_after = Pt(2)
+            if edu.get("cgpa") and edu["cgpa"] not in ("", "[Not Provided]"):
+                p_cgpa = doc.add_paragraph()
+                p_cgpa.clear()
+                r_cgpa = p_cgpa.add_run(f"CGPA: {edu['cgpa']}")
+                r_cgpa.font.size = Pt(BODY - 1)
+                r_cgpa.font.name = FONT_BODY
+                r_cgpa.font.color.rgb = RGBColor(80, 80, 80)
+                p_cgpa.paragraph_format.space_before = Pt(0)
+                p_cgpa.paragraph_format.space_after = Pt(2)
             for b in (edu.get("bullets") or []):
                 if b and b != "[Not Provided]":
                     _add_bullet(doc, b, font_size=BODY - 1, font_name=FONT_BODY)
@@ -5195,7 +5603,15 @@ def generate_creative_docx(data: dict) -> BytesIO:
         for label, key in [("LinkedIn", "linkedin"), ("GitHub", "github"), ("Portfolio", "portfolio")]:
             val = contact_exec.get(key, "")
             if val and val not in ("", "[Not Provided]", "Not Provided"):
-                _add_bullet(doc, f"{label}: {val}", font_size=BODY, font_name=FONT_BODY)
+                p_link = doc.add_paragraph()
+                p_link.paragraph_format.space_before = Pt(2)
+                p_link.paragraph_format.space_after = Pt(2)
+                label_run = p_link.add_run(f"{label}: ")
+                label_run.bold = True
+                label_run.font.size = Pt(BODY)
+                label_run.font.name = FONT_BODY
+                label_run.font.color.rgb = RGBColor(*TEAL)
+                _add_hyperlink(p_link, val, val, font_name=FONT_BODY, font_size=BODY, color_rgb=(0, 128, 128))
 
     # ══════════════════════════════════════════════════════════════════════
     # SECTION 7: LANGUAGES
@@ -5965,19 +6381,10 @@ if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
 # ---------------- Sidebar Layout with Inline Images ----------------
-st.sidebar.markdown("""
-<p style='
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.10em;
-    text-transform: uppercase;
-    color: #4a5568;
-    border-bottom: 1px solid rgba(255,255,255,0.06);
-    padding-bottom: 8px;
-    margin-bottom: 12px;
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
-'>🏷️ Job Configuration</p>
-""", unsafe_allow_html=True)
+st.sidebar.markdown(
+    "<p style='font-size:0.72rem;font-weight:700;letter-spacing:0.10em;text-transform:uppercase;color:#4a5568;border-bottom:1px solid rgba(255,255,255,0.06);padding-bottom:8px;margin-bottom:12px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;'>Job Configuration</p>",
+    unsafe_allow_html=True
+)
 
 # ---------------- Job Information Dropdown ----------------
 with st.sidebar.expander("![Job](https://img.icons8.com/ios-filled/20/briefcase.png) Enter Job Details", expanded=False):
@@ -6016,45 +6423,18 @@ with st.sidebar.expander("![Settings](https://img.icons8.com/ios-filled/20/setti
     # ---------------- Inline SVG Validation ----------------
     if total_weight != 90:
         st.markdown(
-            f"""
-            <div style="display:flex;align-items:center;gap:8px;
-                        border:1px solid rgba(251,113,133,0.3);
-                        background:linear-gradient(135deg,rgba(251,113,133,0.12) 0%,rgba(251,113,133,0.05) 100%);
-                        padding:10px 14px;
-                        border-radius:10px;
-                        backdrop-filter:blur(12px);">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="#fb7185" viewBox="0 0 24 24">
-                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10
-                             10-4.48 10-10S17.52 2 12 2zm0 15
-                             c-.83 0-1.5.67-1.5 1.5S11.17 20
-                             12 20s1.5-.67 1.5-1.5S12.83 17
-                             12 17zm1-4V7h-2v6h2z"/>
-                </svg>
-                <span style="color:#fca5a5;font-weight:600;font-size:0.8rem;font-family:-apple-system,sans-serif;">
-                    Total = {total_weight}. Adjust to exactly 90 (Format = 10 pts fixed).
-                </span>
-            </div>
-            """,
+            f"<div style=\"display:flex;align-items:center;gap:8px;border:1px solid rgba(251,113,133,0.3);background:linear-gradient(135deg,rgba(251,113,133,0.12) 0%,rgba(251,113,133,0.05) 100%);padding:10px 14px;border-radius:10px;backdrop-filter:blur(12px);\">"
+            f"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"#fb7185\" style=\"flex-shrink:0;vertical-align:middle;\"><path d=\"M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 15c-.83 0-1.5.67-1.5 1.5S11.17 20 12 20s1.5-.67 1.5-1.5S12.83 17 12 17zm1-4V7h-2v6h2z\"/></svg>"
+            f"<span style=\"color:#fca5a5;font-weight:600;font-size:0.8rem;font-family:-apple-system,sans-serif;\">Total = {total_weight}. Adjust to exactly 90 (Format = 10 pts fixed).</span>"
+            f"</div>",
             unsafe_allow_html=True
         )
     else:
         st.markdown(
-            f"""
-            <div style="display:flex;align-items:center;gap:8px;
-                        border:1px solid rgba(52,211,153,0.28);
-                        background:linear-gradient(135deg,rgba(52,211,153,0.12) 0%,rgba(52,211,153,0.05) 100%);
-                        padding:10px 14px;
-                        border-radius:10px;
-                        backdrop-filter:blur(12px);">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="#34d399" viewBox="0 0 24 24">
-                    <path d="M9 16.2l-3.5-3.5-1.4 1.4L9
-                             19 20.3 7.7l-1.4-1.4z"/>
-                </svg>
-                <span style="color:#6ee7b7;font-weight:600;font-size:0.8rem;font-family:-apple-system,sans-serif;">
-                    Weights balanced · Content = 90 pts · Format = 10 pts · Total = 100
-                </span>
-            </div>
-            """,
+            f"<div style=\"display:flex;align-items:center;gap:8px;border:1px solid rgba(52,211,153,0.28);background:linear-gradient(135deg,rgba(52,211,153,0.12) 0%,rgba(52,211,153,0.05) 100%);padding:10px 14px;border-radius:10px;backdrop-filter:blur(12px);\">"
+            f"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"#34d399\" style=\"flex-shrink:0;vertical-align:middle;\"><path d=\"M9 16.2l-3.5-3.5-1.4 1.4L9 19 20.3 7.7l-1.4-1.4z\"/></svg>"
+            f"<span style=\"color:#6ee7b7;font-weight:600;font-size:0.8rem;font-family:-apple-system,sans-serif;\">Weights balanced · Content = 90 pts · Format = 10 pts · Total = 100</span>"
+            f"</div>",
             unsafe_allow_html=True
         )
 
@@ -6065,12 +6445,62 @@ with tab1:
         "📄 Upload PDF Resumes",
         type=["pdf"],
         accept_multiple_files=True,
-        help="Upload one or more resumes in PDF format (max 200MB each)."
+        help="Upload one or more resumes in PDF format (max 5MB each)."
     )
+
+    # ── 5 MB hard cap ────────────────────────────────────────────────────────
+    _MAX_FILE_MB  = 5
+    _MAX_FILE_BYTES = _MAX_FILE_MB * 1024 * 1024
 
     if uploaded_files:
         for uploaded_file in uploaded_files:
             with st.container():
+
+                # ── Size gate — reject before any processing ─────────────────
+                file_bytes = uploaded_file.size  # Streamlit exposes .size directly
+                file_mb    = round(file_bytes / (1024 * 1024), 2)
+
+                if file_bytes > _MAX_FILE_BYTES:
+                    _svg_oversized = f'<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fb7185" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>'
+                    _svg_dot       = '<svg width="9" height="9" viewBox="0 0 9 9" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;margin-top:1px;"><circle cx="4.5" cy="4.5" r="4.5" fill="#fb7185"/></svg>'
+                    _svg_info      = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>'
+                    _svg_compress  = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#7dd3fc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:3px;"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>'
+                    _svg_export    = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#7dd3fc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:3px;"><rect x="4" y="2" width="16" height="20" rx="2"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>'
+                    _svg_img       = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#7dd3fc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:3px;"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>'
+
+                    fix_items_size = [
+                        (_svg_compress, "Open your resume in <strong>Microsoft Word or Google Docs</strong> and re-export as PDF"),
+                        (_svg_export,   "Use <strong>File &rarr; Export &rarr; Reduce File Size</strong> or <strong>Save as PDF (Optimised)</strong>"),
+                        (_svg_img,      "Remove embedded high-resolution photos or images from the resume before saving"),
+                    ]
+                    fix_html_size = "".join(
+                        f"<li style='display:flex;align-items:flex-start;gap:8px;margin-bottom:8px;list-style:none;'>{icon}<span>{text}</span></li>"
+                        for icon, text in fix_items_size
+                    )
+
+                    size_card = (
+                        '<div style="background:linear-gradient(135deg,rgba(251,113,133,0.15) 0%,rgba(0,0,0,0) 100%);border:1px solid rgba(251,113,133,0.35);border-radius:16px;padding:22px 24px;margin:14px 0;backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);box-shadow:0 8px 32px rgba(0,0,0,0.3),inset 0 1px 0 rgba(255,255,255,0.06);font-family:-apple-system,BlinkMacSystemFont,sans-serif;position:relative;overflow:hidden;">'
+                        '<div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,transparent,#fb7185,transparent);opacity:0.6;"></div>'
+                        f'<div style="display:flex;align-items:flex-start;gap:14px;margin-bottom:16px;">'
+                        f'<div style="width:44px;height:44px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.09);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">{_svg_oversized}</div>'
+                        f'<div style="flex:1;">'
+                        f'<div style="display:flex;align-items:center;gap:6px;font-size:0.72rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#fb7185;margin-bottom:4px;">{_svg_dot} File Too Large — Exceeds 5 MB Limit</div>'
+                        f'<div style="font-size:1rem;font-weight:600;color:#f0f4f8;word-break:break-all;">{uploaded_file.name}</div>'
+                        f'</div></div>'
+                        f'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">'
+                        f'<div style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.09);border-radius:8px;padding:6px 12px;font-size:0.78rem;color:#94a3b8;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg> {file_mb} MB uploaded</div>'
+                        f'<div style="display:flex;align-items:center;gap:6px;background:rgba(251,113,133,0.10);border:1px solid rgba(251,113,133,0.25);border-radius:8px;padding:6px 12px;font-size:0.78rem;color:#fca5a5;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg> Limit: {_MAX_FILE_MB} MB</div>'
+                        f'</div>'
+                        f'<div style="background:rgba(56,189,248,0.07);border:1px solid rgba(56,189,248,0.18);border-radius:10px;padding:12px 16px;">'
+                        f'<div style="display:flex;align-items:center;gap:6px;font-size:0.72rem;font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:#38bdf8;margin-bottom:10px;">{_svg_info} How to Reduce File Size</div>'
+                        f'<ul style="margin:0;padding:0;color:#7dd3fc;font-size:0.82rem;line-height:1.8;">{fix_html_size}</ul>'
+                        f'</div>'
+                        f'</div>'
+                    )
+                    st.markdown(size_card, unsafe_allow_html=True)
+                    continue  # skip all further processing for this file
+
+                # ── Normal flow — file is within size limit ───────────────────
                 st.subheader(f"📄 Original Resume Preview: {uploaded_file.name}")
 
                 try:
@@ -6082,32 +6512,16 @@ with tab1:
 
                     # Reset pointer so file can be read again later
                     uploaded_file.seek(0)
-
-                    # ✅ Extract text safely
-                    resume_text = safe_extract_text(uploaded_file)
-
-                    if resume_text:
-                        st.markdown(f"""
-                        <div class='slide-message success-msg'>
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor"
-                              stroke-width="2" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>
-                            ✅ Successfully processed <b>{uploaded_file.name}</b>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        # 🔹 Continue with ATS scoring, bias detection, etc. here
-                    else:
-                        st.markdown(f"""
-                        <div class='slide-message warn-msg'>
-                            ⚠️ <b>{uploaded_file.name}</b> does not contain valid resume text.
-                        </div>
-                        """, unsafe_allow_html=True)
+                    # NOTE: Text extraction + scanned rejection card is handled
+                    # exclusively in the processing loop below to avoid double rendering.
 
                 except Exception as e:
-                    st.markdown(f"""
-                    <div class='slide-message error-msg'>
-                        ❌ Could not display or process <b>{uploaded_file.name}</b>: {e}
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.markdown(
+                        f'<div class="slide-message error-msg">'
+                        f'<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>'
+                        f' Could not display or process <b>{uploaded_file.name}</b>: {e}</div>',
+                        unsafe_allow_html=True
+                    )
 
 # ✅ Initialize state
 # Initialize session state
@@ -6125,6 +6539,10 @@ if uploaded_files and job_description:
 
     for uploaded_file in uploaded_files:
         if uploaded_file.name in st.session_state.processed_files:
+            continue
+
+        # ── Skip files that exceeded the 5 MB size cap ───────────────────────
+        if uploaded_file.size > _MAX_FILE_BYTES:
             continue
 
         # ✅ Improved optimized scanner animation with better performance
@@ -6291,15 +6709,16 @@ if uploaded_files and job_description:
         # ✅ Reduced delay for better UX
         time.sleep(4)
 
-        # ✅ Extract text from PDF
-        text = extract_text_from_pdf(file_path)
-        if not text:
-            st.warning(f"⚠️ Could not extract text from {uploaded_file.name}. Skipping.")
+        # ✅ Extract text from PDF (scanned files return _SCANNED_SENTINEL)
+        uploaded_file.seek(0)
+        full_text = safe_extract_text(uploaded_file, container=tab1)
+        if full_text is None or full_text == _SCANNED_SENTINEL:
+            # Rejection card already rendered by safe_extract_text for scanned files.
+            # Plain None means unreadable for another reason — warning already shown.
             scanner_placeholder.empty()
             continue
 
-        all_text.append(" ".join(text))
-        full_text = " ".join(text)
+        all_text.append(full_text)
 
         # ✅ Bias detection
         bias_score, masc_count, fem_count, detected_masc, detected_fem = detect_bias(full_text)
@@ -6640,9 +7059,8 @@ with tab1:
         msg_placeholder = st.empty()
         msg_placeholder.markdown("""
         <div class='slide-message success-msg'>
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor"
-              stroke-width="2" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>
-            ✅ Cleared uploaded resume history. You can re-upload now.
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><polyline points="20 6 9 17 4 12"/></svg>
+            Cleared uploaded resume history. You can re-upload now.
         </div>
         """, unsafe_allow_html=True)
 
@@ -6891,24 +7309,13 @@ with tab1:
             missing_skills = resume.get("Missing Skills", [])
 
             with st.expander(f"{resume_name} | {candidate_name}"):
-                st.markdown(f"""
-                <div style="
-                    background: linear-gradient(135deg, rgba(56,189,248,0.10) 0%, rgba(79,163,227,0.05) 100%);
-                    border: 1px solid rgba(56,189,248,0.18);
-                    border-radius: 14px;
-                    padding: 18px 22px;
-                    margin-bottom: 20px;
-                ">
-                    <div style="
-                        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
-                        font-size: 1rem;
-                        font-weight: 700;
-                        color: #f0f4f8;
-                        letter-spacing: -0.01em;
-                    ">ATS Evaluation — <span style='color:#38bdf8;'>{candidate_name}</span></div>
-                    <div style="font-size:0.75rem; color:#64748b; margin-top:4px; font-family: -apple-system, sans-serif; text-transform:uppercase; letter-spacing:0.05em;">Resume Intelligence Report</div>
-                </div>
-                """, unsafe_allow_html=True)
+                st.markdown(
+                    f'<div style="background:linear-gradient(135deg,rgba(56,189,248,0.10) 0%,rgba(79,163,227,0.05) 100%);border:1px solid rgba(56,189,248,0.18);border-radius:14px;padding:18px 22px;margin-bottom:20px;">'
+                    f'<div style="font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:1rem;font-weight:700;color:#f0f4f8;letter-spacing:-0.01em;">ATS Evaluation — <span style="color:#38bdf8;">{candidate_name}</span></div>'
+                    f'<div style="font-size:0.75rem;color:#64748b;margin-top:4px;font-family:-apple-system,sans-serif;text-transform:uppercase;letter-spacing:0.05em;">Resume Intelligence Report</div>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
 
                 # ── SVG icon helper ──────────────────────────────────────────────
                 SVG_ICONS = {
@@ -6926,26 +7333,15 @@ with tab1:
 
                 def svg_ats_card(svg_key, label, value, tooltip=None):
                     tooltip_attr = f'title="{tooltip}"' if tooltip else ""
-                    return f"""
-                    <div style="
-                        background: rgba(15,23,42,0.85);
-                        border: 1px solid rgba(56,189,248,0.25);
-                        border-radius: 12px;
-                        padding: 14px 16px;
-                        margin-bottom: 8px;
-                        height: 86px;
-                        display: flex;
-                        flex-direction: column;
-                        justify-content: center;
-                        overflow: hidden;
-                        box-sizing: border-box;
-                    ">
-                        <div style="display:flex;align-items:center;gap:6px;font-size:0.72rem; color:#94a3b8;">
-                            <span style="color:#38bdf8;flex-shrink:0;">{SVG_ICONS.get(svg_key,"")}</span>
-                            <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{label}</span>
-                        </div>
-                        <div {tooltip_attr} style="font-size:1.35rem; font-weight:700; color:#f0f4f8; margin-top:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{value}</div>
-                    </div>"""
+                    return (
+                        f'<div style="background:rgba(15,23,42,0.85);border:1px solid rgba(56,189,248,0.25);border-radius:12px;padding:14px 16px;margin-bottom:8px;height:86px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;box-sizing:border-box;">'
+                        f'<div style="display:flex;align-items:center;gap:6px;font-size:0.72rem;color:#94a3b8;">'
+                        f'<span style="color:#38bdf8;flex-shrink:0;">{SVG_ICONS.get(svg_key,"")}</span>'
+                        f'<span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{label}</span>'
+                        f'</div>'
+                        f'<div {tooltip_attr} style="font-size:1.35rem;font-weight:700;color:#f0f4f8;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{value}</div>'
+                        f'</div>'
+                    )
 
                 # ── Overall Score Gauge (SVG) ────────────────────────────────────
                 overall_pct = resume.get("ATS Match %", 0)
@@ -6967,42 +7363,30 @@ with tab1:
                 circumference = 3.14159 * radius  # half-circle arc = π*r
                 arc_offset = circumference * (1 - overall_pct / 100)
 
-                st.markdown(f"""
-                <div style="display:flex;align-items:center;gap:32px;padding:20px 24px;
-                            background:rgba(15,23,42,0.9);border:1px solid rgba(56,189,248,0.2);
-                            border-radius:16px;margin-bottom:20px;flex-wrap:wrap;">
-                    <!-- Gauge -->
-                    <div style="flex-shrink:0;text-align:center;">
-                        <svg width="180" height="100" viewBox="0 0 180 100">
-                            <!-- Track -->
-                            <path d="M 20 90 A 70 70 0 0 1 160 90" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="12" stroke-linecap="round"/>
-                            <!-- Value arc -->
-                            <path d="M 20 90 A 70 70 0 0 1 160 90" fill="none"
-                                stroke="{gauge_color}" stroke-width="12" stroke-linecap="round"
-                                stroke-dasharray="{circumference}" stroke-dashoffset="{arc_offset}"
-                                style="transition:stroke-dashoffset 0.8s ease;"/>
-                            <!-- Score text -->
-                            <text x="90" y="80" text-anchor="middle" font-size="28" font-weight="700"
-                                fill="{gauge_color}" font-family="-apple-system,sans-serif">{overall_pct}</text>
-                            <text x="90" y="98" text-anchor="middle" font-size="11" fill="#64748b"
-                                font-family="-apple-system,sans-serif">/ 100</text>
-                        </svg>
-                        <div style="font-size:0.75rem;color:#64748b;margin-top:2px;font-family:-apple-system,sans-serif;letter-spacing:0.04em;text-transform:uppercase;">Overall ATS Score</div>
-                    </div>
-                    <!-- Label & Format quick-look -->
-                    <div style="flex:1;min-width:200px;">
-                        <div style="font-size:1.1rem;font-weight:700;color:#f0f4f8;font-family:-apple-system,sans-serif;">{resume.get("Formatted Score","N/A")}</div>
-                        <div style="margin-top:12px;display:flex;align-items:center;gap:10px;">
-                            <span style="color:#38bdf8;">{SVG_ICONS["format"]}</span>
-                            <span style="font-size:0.82rem;color:#94a3b8;">Format Score:</span>
-                            <span style="font-size:0.95rem;font-weight:700;color:#f0f4f8;">{fmt_score}/100</span>
-                            <span style="background:rgba(56,189,248,0.12);border:1px solid rgba(56,189,248,0.25);
-                                        border-radius:6px;padding:2px 8px;font-size:0.75rem;font-weight:700;color:#38bdf8;">{fmt_grade}</span>
-                        </div>
-                        <div style="margin-top:6px;font-size:0.78rem;color:#64748b;">{fmt_label}</div>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                gauge_html = (
+                    f'<div style="display:flex;align-items:center;gap:32px;padding:20px 24px;background:rgba(15,23,42,0.9);border:1px solid rgba(56,189,248,0.2);border-radius:16px;margin-bottom:20px;flex-wrap:wrap;">'
+                    f'<div style="flex-shrink:0;text-align:center;">'
+                    f'<svg width="180" height="100" viewBox="0 0 180 100">'
+                    f'<path d="M 20 90 A 70 70 0 0 1 160 90" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="12" stroke-linecap="round"/>'
+                    f'<path d="M 20 90 A 70 70 0 0 1 160 90" fill="none" stroke="{gauge_color}" stroke-width="12" stroke-linecap="round" stroke-dasharray="{circumference}" stroke-dashoffset="{arc_offset}" style="transition:stroke-dashoffset 0.8s ease;"/>'
+                    f'<text x="90" y="80" text-anchor="middle" font-size="28" font-weight="700" fill="{gauge_color}" font-family="-apple-system,sans-serif">{overall_pct}</text>'
+                    f'<text x="90" y="98" text-anchor="middle" font-size="11" fill="#64748b" font-family="-apple-system,sans-serif">/ 100</text>'
+                    f'</svg>'
+                    f'<div style="font-size:0.75rem;color:#64748b;margin-top:2px;font-family:-apple-system,sans-serif;letter-spacing:0.04em;text-transform:uppercase;">Overall ATS Score</div>'
+                    f'</div>'
+                    f'<div style="flex:1;min-width:200px;">'
+                    f'<div style="font-size:1.1rem;font-weight:700;color:#f0f4f8;font-family:-apple-system,sans-serif;">{resume.get("Formatted Score","N/A")}</div>'
+                    f'<div style="margin-top:12px;display:flex;align-items:center;gap:10px;">'
+                    f'<span style="color:#38bdf8;">{SVG_ICONS["format"]}</span>'
+                    f'<span style="font-size:0.82rem;color:#94a3b8;">Format Score:</span>'
+                    f'<span style="font-size:0.95rem;font-weight:700;color:#f0f4f8;">{fmt_score}/100</span>'
+                    f'<span style="background:rgba(56,189,248,0.12);border:1px solid rgba(56,189,248,0.25);border-radius:6px;padding:2px 8px;font-size:0.75rem;font-weight:700;color:#38bdf8;">{fmt_grade}</span>'
+                    f'</div>'
+                    f'<div style="margin-top:6px;font-size:0.78rem;color:#64748b;">{fmt_label}</div>'
+                    f'</div>'
+                    f'</div>'
+                )
+                st.markdown(gauge_html, unsafe_allow_html=True)
 
                 # ── Score cards row 1 ──────────────────────────────────────────
                 formatted_val = resume.get("Formatted Score", "N/A")
@@ -7336,7 +7720,7 @@ with tab1:
                         key=f"download_pdf_{resume['Resume Name']}"
                     )
 
-    else:           
+    elif not uploaded_files:
         st.warning("⚠️ Please upload resumes to view dashboard analytics.")
 from xhtml2pdf import pisa
 from io import BytesIO
