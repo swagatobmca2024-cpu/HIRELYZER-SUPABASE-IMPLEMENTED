@@ -6,6 +6,7 @@ import string
 import re
 import asyncio
 import io
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib.parse
 import base64
 from io import BytesIO
@@ -6438,8 +6439,476 @@ with st.sidebar.expander("![Settings](https://img.icons8.com/ios-filled/20/setti
             unsafe_allow_html=True
         )
 
+# ============================================================
+# ⚙️  RULE-BASED ENGINE — Pure regex/keyword analysis
+#     Mirrors every output key of the LLM functions so the
+#     rest of the app (dashboard, DB insert, downloads) is
+#     100% unchanged regardless of which engine is used.
+# ============================================================
+
+import datetime as _dt
+
+# ── Rule-based domain detection (keyword-only, no LLM) ──────────────────────
+_DOMAIN_KEYWORDS = {
+    "Data Science":           ["pandas","numpy","matplotlib","scipy","statistics","data analysis","tableau","power bi","r programming","data science","jupyter"],
+    "AI/Machine Learning":    ["machine learning","deep learning","tensorflow","pytorch","keras","neural network","nlp","computer vision","scikit","reinforcement learning","llm","bert","gpt","transformer","ai","artificial intelligence"],
+    "UI/UX Design":           ["figma","sketch","adobe xd","wireframe","prototype","user experience","user interface","usability","ux","ui","design thinking","user research","accessibility"],
+    "Mobile Development":     ["android","ios","swift","kotlin","flutter","react native","xamarin","mobile app","xcode","gradle","expo"],
+    "Frontend Development":   ["html","css","javascript","react","vue","angular","typescript","webpack","sass","less","tailwind","bootstrap","responsive design","frontend"],
+    "Backend Development":    ["node.js","express","django","flask","spring boot","fastapi","laravel","ruby on rails","backend","rest api","graphql","microservices"],
+    "Full Stack Development": ["full stack","fullstack","mern","mean","next.js","nuxt","both frontend and backend"],
+    "Cybersecurity":          ["cybersecurity","penetration testing","ethical hacking","soc","siem","vulnerability","firewall","kali","burpsuite","nmap","cissp","ceh","security analyst"],
+    "Cloud Engineering":      ["aws","azure","gcp","google cloud","cloud","terraform","cloudformation","ec2","s3","lambda","cloud engineer"],
+    "DevOps/Infrastructure":  ["devops","ci/cd","jenkins","docker","kubernetes","ansible","puppet","chef","gitlab","github actions","infrastructure","helm","argocd"],
+    "Quality Assurance":      ["testing","qa","selenium","jest","pytest","cypress","automation testing","manual testing","test plan","bug report","quality assurance","jira"],
+    "Data Engineering":       ["spark","hadoop","airflow","kafka","etl","data pipeline","data warehouse","bigquery","snowflake","dbt","data engineer"],
+    "Blockchain Development": ["blockchain","solidity","ethereum","web3","smart contract","nft","defi","hyperledger","truffle"],
+    "Database Management":    ["sql","mysql","postgresql","mongodb","redis","oracle","nosql","database","dba","sqlite","cassandra"],
+    "Networking":             ["networking","cisco","ccna","tcp/ip","dns","dhcp","vpn","routing","switching","wireshark","network engineer"],
+    "Product Management":     ["product manager","product roadmap","stakeholder","sprint","agile","scrum","okr","product strategy","user story","backlog"],
+    "Digital Marketing":      ["seo","sem","google ads","social media","content marketing","email marketing","analytics","marketing","ppc","copywriting"],
+    "Software Engineering":   ["software engineer","software development","oop","design patterns","git","algorithms","data structures","system design"],
+}
+
+def _rule_detect_domain(text: str) -> str:
+    text_lower = text.lower()
+    scores = {}
+    for domain, keywords in _DOMAIN_KEYWORDS.items():
+        scores[domain] = sum(1 for kw in keywords if kw in text_lower)
+    best = max(scores, key=scores.get)
+    return best if scores[best] > 0 else "Software Engineering"
+
+# ── Rule-based candidate name extraction ────────────────────────────────────
+def _rule_extract_name(text: str) -> str:
+    """Try to extract a person name from the top ~10 lines of the resume."""
+    lines = [l.strip() for l in text.split("\n") if l.strip()][:12]
+    _stop = {
+        "resume","cv","curriculum","vitae","updated","final","new","draft",
+        "developer","engineer","designer","manager","analyst","consultant",
+        "mobile","web","data","software","frontend","backend","fullstack",
+        "senior","junior","lead","intern","associate","staff","entry",
+    }
+    for line in lines:
+        # Skip lines that look like emails, phones, URLs, or long sentences
+        if re.search(r'[@\d/\\|<>{}\[\]]', line):
+            continue
+        if len(line) > 50:
+            continue
+        tokens = line.strip().split()
+        if 2 <= len(tokens) <= 4:
+            if all(re.match(r'^[A-Za-z]{2,25}$', t) and t.lower() not in _stop for t in tokens):
+                return " ".join(t.title() for t in tokens)
+    return "Not Found"
+
+# ── Rule-based ATS scoring ───────────────────────────────────────────────────
+def rule_ats_percentage_score(
+    resume_text,
+    job_description,
+    edu_weight=20,
+    exp_weight=35,
+    skills_weight=20,
+    lang_weight=5,
+    keyword_weight=10,
+    format_data=None,
+):
+    import datetime as _dt
+    text_lower = resume_text.lower()
+    jd_lower   = job_description.lower()
+
+    # ── Domain detection ─────────────────────────────────────────────────────
+    resume_domain = _rule_detect_domain(resume_text)
+    job_domain    = _rule_detect_domain(job_description)
+    similarity_score = get_domain_similarity(resume_domain, job_domain)
+    MAX_DOMAIN_PENALTY = 15
+    domain_penalty = round((1 - similarity_score) * MAX_DOMAIN_PENALTY)
+
+    # ── Candidate name ───────────────────────────────────────────────────────
+    candidate_name = _rule_extract_name(resume_text)
+
+    # ── 1. EDUCATION SCORE ───────────────────────────────────────────────────
+    priority_degrees = [
+        "b.tech","be computer","bsc computer","mca","msc computer",
+        "bachelor of technology","master of computer","bca","m.tech",
+        "bachelor of engineering","master of science","phd","m.sc","b.sc"
+    ]
+    general_degrees = ["bachelor","master","degree","diploma","graduate","university","college","engineering","science"]
+    has_priority = any(d in text_lower for d in priority_degrees)
+    has_general  = any(d in text_lower for d in general_degrees)
+    has_certs    = any(w in text_lower for w in ["certification","certified","certificate","coursera","udemy","edx","aws certified","google certified"])
+    cgpa_match   = re.search(r'\b([89]\.\d|10\.0|[7-9]\d?)\s*/\s*10\b|\b(3\.[5-9]|4\.0)\s*/\s*4\b', text_lower)
+
+    if has_priority:
+        edu_score = int(edu_weight * 0.85)
+    elif has_general:
+        edu_score = int(edu_weight * 0.65)
+    elif has_certs:
+        edu_score = int(edu_weight * 0.45)
+    else:
+        edu_score = int(edu_weight * 0.20)
+    if cgpa_match:
+        edu_score = min(edu_weight, edu_score + int(edu_weight * 0.10))
+
+    edu_analysis = (
+        f"**Score:** {edu_score}/{edu_weight}\n\n"
+        f"{'Priority degree detected (B.Tech/MCA/BSc CS or equivalent).' if has_priority else 'General degree detected.' if has_general else 'No formal degree; certifications counted.'} "
+        f"{'High CGPA detected (+bonus).' if cgpa_match else ''} "
+        f"{'Certifications present.' if has_certs else ''}"
+    )
+
+    # ── 2. EXPERIENCE SCORE ──────────────────────────────────────────────────
+    exp_sections = re.findall(
+        r'\b(experience|employment|work history|career|professional experience|positions held)\b',
+        text_lower
+    )
+    year_spans = re.findall(r'\b(20\d{2})\b', text_lower)
+    years_mentioned = sorted(set(int(y) for y in year_spans))
+    year_range = (max(years_mentioned) - min(years_mentioned)) if len(years_mentioned) >= 2 else 0
+
+    strong_verbs = ["architected","engineered","designed","deployed","optimized","automated",
+                    "built","launched","developed","implemented","integrated","configured",
+                    "led","managed","directed","reduced","increased","improved","streamlined"]
+    verb_count = sum(1 for v in strong_verbs if re.search(rf'\b{v}\b', text_lower))
+
+    if year_range >= 5 and verb_count >= 5:
+        exp_score = int(exp_weight * 0.88)
+    elif year_range >= 3 and verb_count >= 3:
+        exp_score = int(exp_weight * 0.72)
+    elif year_range >= 1 or (exp_sections and verb_count >= 2):
+        exp_score = int(exp_weight * 0.55)
+    elif exp_sections:
+        exp_score = int(exp_weight * 0.38)
+    else:
+        exp_score = int(exp_weight * 0.18)
+
+    exp_analysis = (
+        f"**Score:** {exp_score}/{exp_weight}\n\n"
+        f"Estimated experience span: ~{year_range} year(s) from dates found. "
+        f"{verb_count} strong action verbs detected. "
+        f"{'Experience section present.' if exp_sections else 'No explicit experience section detected.'}"
+    )
+
+    # ── 3. SKILLS SCORE ──────────────────────────────────────────────────────
+    jd_words = set(re.findall(r'\b[a-z][a-z0-9\+\#\.]{2,}\b', jd_lower))
+    resume_words = set(re.findall(r'\b[a-z][a-z0-9\+\#\.]{2,}\b', text_lower))
+    _stop_words = {"and","the","for","with","from","that","this","have","will","are","was","were","been","has","not","but","can","may","all","its","our","your","their","which","who","what","how"}
+    jd_keywords = jd_words - _stop_words
+    matched_skills = jd_keywords & resume_words
+    skill_ratio = len(matched_skills) / max(len(jd_keywords), 1)
+
+    if skill_ratio >= 0.5:
+        skills_score = int(skills_weight * 0.90)
+    elif skill_ratio >= 0.35:
+        skills_score = int(skills_weight * 0.72)
+    elif skill_ratio >= 0.20:
+        skills_score = int(skills_weight * 0.55)
+    elif skill_ratio >= 0.10:
+        skills_score = int(skills_weight * 0.38)
+    else:
+        skills_score = int(skills_weight * 0.18)
+
+    top_missing = sorted(jd_keywords - resume_words)[:15]
+    skills_analysis = (
+        f"**Score:** {skills_score}/{skills_weight}\n\n"
+        f"Keyword overlap: {len(matched_skills)}/{len(jd_keywords)} JD terms matched ({int(skill_ratio*100)}%).\n\n"
+        f"**Skills Gaps (Development Opportunities):**\n"
+        + "\n".join(f"- {kw}" for kw in top_missing[:10])
+    )
+
+    # ── 4. LANGUAGE / GRAMMAR SCORE ──────────────────────────────────────────
+    sentences = re.split(r'[.!?]+', resume_text)
+    long_sentences = [s for s in sentences if len(s.split()) > 30]
+    passive_count = len(re.findall(r'\b(was|were|been|is|are)\s+\w+ed\b', text_lower))
+    filler_count  = len(re.findall(r'\b(very|really|quite|basically|actually|literally|just)\b', text_lower))
+    pronoun_count = len(re.findall(r'\b(i |my |me |we |our )\b', text_lower))
+    deductions_lang = len(long_sentences) * 0.3 + passive_count * 0.2 + filler_count * 0.3 + pronoun_count * 0.4
+    lang_score = max(int(lang_weight * 0.25), min(lang_weight, lang_weight - int(deductions_lang)))
+    lang_analysis = (
+        f"**Score:** {lang_score}/{lang_weight}\n\n"
+        f"Long sentences (>30 words): {len(long_sentences)}. "
+        f"Passive constructions: {passive_count}. "
+        f"Filler words: {filler_count}. "
+        f"Personal pronouns: {pronoun_count}.\n\n"
+        f"**Grammar & Professional Tone:** "
+        + ("Strong professional language detected." if lang_score >= int(lang_weight * 0.75)
+           else "Some language improvements recommended — reduce passive voice and filler words.")
+    )
+
+    # ── 5. KEYWORD SCORE ─────────────────────────────────────────────────────
+    # Extract explicit tech/skill keywords from JD
+    tech_pattern = re.compile(
+        r'\b(python|java|javascript|typescript|react|angular|vue|node|django|flask|spring|'
+        r'aws|azure|gcp|docker|kubernetes|sql|nosql|mongodb|postgresql|redis|kafka|spark|'
+        r'tensorflow|pytorch|sklearn|pandas|numpy|git|linux|agile|scrum|rest|graphql|'
+        r'html|css|c\+\+|c#|golang|ruby|scala|swift|kotlin|flutter|android|ios)\b',
+        re.IGNORECASE
+    )
+    jd_tech  = set(m.lower() for m in tech_pattern.findall(job_description))
+    res_tech = set(m.lower() for m in tech_pattern.findall(resume_text))
+    matched_tech = jd_tech & res_tech
+    keyword_ratio = len(matched_tech) / max(len(jd_tech), 1)
+
+    if keyword_ratio >= 0.6:
+        keyword_score = int(keyword_weight * 0.90)
+    elif keyword_ratio >= 0.4:
+        keyword_score = int(keyword_weight * 0.70)
+    elif keyword_ratio >= 0.2:
+        keyword_score = int(keyword_weight * 0.50)
+    else:
+        keyword_score = int(keyword_weight * 0.25)
+
+    missing_kw = sorted(jd_tech - res_tech)
+    keyword_analysis = (
+        f"**Score:** {keyword_score}/{keyword_weight}\n\n"
+        f"Technical keyword match: {len(matched_tech)}/{len(jd_tech)} ({int(keyword_ratio*100)}%).\n\n"
+        f"**Keyword Enhancement Opportunities:**\n"
+        + "\n".join(f"- {kw}" for kw in missing_kw[:10])
+    )
+
+    # ── Format analysis (reuse existing rule-based checker) ──────────────────
+    fmt_score_raw  = format_data.get("format_score", 75) if format_data else 75
+    fmt_grade      = format_data.get("letter_grade", "N/A") if format_data else "N/A"
+    fmt_label      = format_data.get("label", "") if format_data else ""
+    fmt_issues     = format_data.get("issues", []) if format_data else []
+    fmt_passes     = format_data.get("passes", []) if format_data else []
+    FORMAT_WEIGHT  = 10
+    format_component = round(fmt_score_raw / 100 * FORMAT_WEIGHT)
+    format_analysis = (
+        f"**Format Score:** {fmt_score_raw} / 100\n"
+        f"**Format Grade:** {fmt_grade} — {fmt_label}\n\n"
+        f"**Issues:**\n" + "\n".join(f"- {i}" for i in fmt_issues[:5]) +
+        f"\n\n**Passes:**\n" + "\n".join(f"- {p}" for p in fmt_passes[:5])
+    )
+
+    # ── Score assembly ────────────────────────────────────────────────────────
+    weight_total = edu_weight + exp_weight + skills_weight + lang_weight + keyword_weight
+    raw_content  = edu_score + exp_score + skills_score + lang_score + keyword_score
+    content_score = round(raw_content / max(weight_total, 1) * 90)
+    content_score = max(0, min(90, content_score))
+    pre_penalty   = min(100, content_score + format_component)
+    total_score   = max(15, min(100, pre_penalty - domain_penalty))
+
+    formatted_score = (
+        "Exceptional Match — Top 10% Candidate"    if total_score >= 85 else
+        "Strong Match — Recommend for Interview"    if total_score >= 70 else
+        "Good Potential — Competitive Candidate"    if total_score >= 55 else
+        "Fair Match — Needs Resume Optimization"    if total_score >= 40 else
+        "Developing — Significant Skill Gaps"       if total_score >= 25 else
+        "Poor Match — Major Role Misalignment"
+    )
+
+    final_thoughts = (
+        f"**Overall Evaluation (Rule-Based Engine):**\n\n"
+        f"ATS Score: **{total_score}/100** — {formatted_score}.\n\n"
+        f"Resume Domain: {resume_domain} | Job Domain: {job_domain} | "
+        f"Similarity: {int(similarity_score*100)}% | Domain Penalty: -{domain_penalty} pts.\n\n"
+        f"Content Score: {content_score}/90 | Format Component: {format_component}/10 | "
+        f"Pre-penalty: {pre_penalty}/100.\n\n"
+        f"**Top Strengths:** {verb_count} strong action verbs, "
+        f"{len(matched_tech)} technical keywords matched, "
+        f"{'priority degree present' if has_priority else 'education present' if has_general else 'no formal degree'}.\n\n"
+        f"**Development Areas:** Add missing keywords: {', '.join(missing_kw[:5]) or 'None'}. "
+        f"Reduce passive constructions ({passive_count} found). "
+        f"{'Improve format score.' if fmt_score_raw < 70 else 'Format is acceptable.'}\n\n"
+        f"**Hiring Recommendation:** "
+        + ("Strongly Recommend" if total_score >= 85 else
+           "Recommend" if total_score >= 70 else
+           "Recommend with Reservations" if total_score >= 50 else
+           "Do Not Recommend")
+        + " — Based on rule-based keyword and structure analysis.\n\n"
+        f"**Technical Evaluation Details:**\n"
+        f"- Content Score (rule-based, 90-pt scale): {content_score}/90\n"
+        f"- Format Component (10-pt scale): {format_component}/10 (Format Score: {fmt_score_raw}/100)\n"
+        f"- Pre-Penalty Score: {pre_penalty}/100\n"
+        f"- Domain Penalty Applied: -{domain_penalty} pts (out of max -{MAX_DOMAIN_PENALTY} pts)\n"
+        f"- Final ATS Score: {total_score}/100\n"
+        f"- Domain Similarity: {similarity_score:.2f}/1.0 ({int(similarity_score * 100)}% alignment)\n"
+        f"- Resume Domain Detected: {resume_domain}\n"
+        f"- Target Job Domain: {job_domain}"
+    )
+
+    ats_result = (
+        f"### 🏷️ Candidate Name\n{candidate_name}\n\n"
+        f"### 🎓 ATS Score\n**{total_score}/100** — {formatted_score}\n\n"
+        f"### 🏫 Education Analysis\n{edu_analysis}\n\n"
+        f"### 💼 Experience Analysis\n{exp_analysis}\n\n"
+        f"### 🛠 Skills Analysis\n{skills_analysis}\n\n"
+        f"### 🗣 Language Quality Analysis\n{lang_analysis}\n\n"
+        f"### 🔑 Keyword Analysis\n{keyword_analysis}\n\n"
+        f"### 📐 Format & ATS Compatibility Analysis\n{format_analysis}\n\n"
+        f"### ✅ Final Assessment\n{final_thoughts}"
+    )
+
+    return ats_result, {
+        "Candidate Name":       candidate_name,
+        "Education Score":      edu_score,
+        "Experience Score":     exp_score,
+        "Skills Score":         skills_score,
+        "Language Score":       lang_score,
+        "Keyword Score":        keyword_score,
+        "Format Score":         fmt_score_raw,
+        "Format Grade":         fmt_grade,
+        "Format Label":         fmt_label,
+        "Format Issues":        fmt_issues,
+        "Format Passes":        fmt_passes,
+        "ATS Match %":          total_score,
+        "Formatted Score":      formatted_score,
+        "Education Analysis":   edu_analysis,
+        "Experience Analysis":  exp_analysis,
+        "Skills Analysis":      skills_analysis,
+        "Language Analysis":    lang_analysis,
+        "Keyword Analysis":     keyword_analysis,
+        "Format Analysis":      format_analysis,
+        "Final Thoughts":       final_thoughts,
+        "Missing Keywords":     ", ".join(missing_kw),
+        "Missing Skills":       ", ".join(sorted(jd_keywords - resume_words)[:10]),
+        "Resume Domain":        resume_domain,
+        "Job Domain":           job_domain,
+        "Domain Penalty":       domain_penalty,
+        "Domain Similarity Score": similarity_score,
+    }
+
+
+# ── Rule-based rewrite + highlight ───────────────────────────────────────────
+def rule_rewrite_and_highlight(text, replacement_mapping, user_location):
+    """
+    Pure rule-based version of rewrite_and_highlight().
+    Bias detection is identical (already rule-based in the LLM version).
+    Rewrite = deterministic word substitution using replacement_mapping.
+    JSON skeleton is built from regex extraction (no LLM).
+    Returns same 7-tuple as rewrite_and_highlight().
+    """
+    # ── Bias detection — identical to LLM path ───────────────────────────────
+    highlighted_text = text
+    masculine_count, feminine_count = 0, 0
+    detected_masculine_words, detected_feminine_words = [], []
+    matched_spans = []
+
+    masculine_words_sorted = sorted(gender_words["masculine"], key=len, reverse=True)
+    feminine_words_sorted  = sorted(gender_words["feminine"],  key=len, reverse=True)
+
+    def _span_overlaps(start, end):
+        return any(s < end and e > start for s, e in matched_spans)
+
+    for word in masculine_words_sorted:
+        pattern = re.compile(rf'\b{re.escape(word)}\b', re.IGNORECASE)
+        for match in pattern.finditer(highlighted_text):
+            start, end = match.span()
+            if _span_overlaps(start, end):
+                continue
+            word_match = match.group(0)
+            colored = f"<span style='color:blue;'>{word_match}</span>"
+            highlighted_text = highlighted_text[:start] + colored + highlighted_text[end:]
+            shift = len(colored) - len(word_match)
+            matched_spans = [(s if s < start else s + shift, e if s < start else e + shift) for s, e in matched_spans]
+            matched_spans.append((start, start + len(colored)))
+            masculine_count += 1
+            sentence_match = re.search(r'([^.]*?\b' + re.escape(word_match) + r'\b[^.]*\.)', text, re.IGNORECASE)
+            if sentence_match:
+                sentence = sentence_match.group(1).strip()
+                colored_sentence = re.sub(rf'\b({re.escape(word_match)})\b', r"<span style='color:blue;'>\1</span>", sentence, flags=re.IGNORECASE)
+                detected_masculine_words.append({"word": word_match, "sentence": colored_sentence})
+            break
+
+    for word in feminine_words_sorted:
+        pattern = re.compile(rf'\b{re.escape(word)}\b', re.IGNORECASE)
+        for match in pattern.finditer(highlighted_text):
+            start, end = match.span()
+            if _span_overlaps(start, end):
+                continue
+            word_match = match.group(0)
+            colored = f"<span style='color:red;'>{word_match}</span>"
+            highlighted_text = highlighted_text[:start] + colored + highlighted_text[end:]
+            shift = len(colored) - len(word_match)
+            matched_spans = [(s if s < start else s + shift, e if s < start else e + shift) for s, e in matched_spans]
+            matched_spans.append((start, start + len(colored)))
+            feminine_count += 1
+            sentence_match = re.search(r'([^.]*?\b' + re.escape(word_match) + r'\b[^.]*\.)', text, re.IGNORECASE)
+            if sentence_match:
+                sentence = sentence_match.group(1).strip()
+                colored_sentence = re.sub(rf'\b({re.escape(word_match)})\b', r"<span style='color:red;'>\1</span>", sentence, flags=re.IGNORECASE)
+                detected_feminine_words.append({"word": word_match, "sentence": colored_sentence})
+            break
+
+    # ── Rule-based rewrite — apply replacement_mapping deterministically ─────
+    all_replacements = {**replacement_mapping.get("masculine", {}), **replacement_mapping.get("feminine", {})}
+    rewritten_text = text
+    for biased_word, neutral_word in sorted(all_replacements.items(), key=lambda x: len(x[0]), reverse=True):
+        rewritten_text = re.sub(
+            rf'\b{re.escape(biased_word)}\b',
+            neutral_word,
+            rewritten_text,
+            flags=re.IGNORECASE
+        )
+
+    # ── Build a minimal JSON skeleton from regex extraction ──────────────────
+    def _extract_field(patterns, src):
+        for pat in patterns:
+            m = re.search(pat, src, re.IGNORECASE)
+            if m:
+                return m.group(1).strip()
+        return ""
+
+    email   = _extract_field([r'[\w.+-]+@[\w.-]+\.[a-z]{2,}'], text) or ""
+    phone   = _extract_field([r'(\+?[\d][\d\s\-\(\)]{7,}\d)'], text) or ""
+    linkedin= _extract_field([r'(linkedin\.com/in/[\w\-/]+)'], text) or ""
+    github  = _extract_field([r'(github\.com/[\w\-/]+)'], text) or ""
+    name    = _rule_extract_name(text)
+
+    json_skeleton = json.dumps({
+        "contact": {
+            "name": name, "title": "", "email": email,
+            "phone": phone, "location": user_location or "",
+            "linkedin": linkedin, "github": github, "portfolio": ""
+        },
+        "summary": rewritten_text[:300].replace("\n", " ").strip(),
+        "skills": [], "soft_skills": [], "languages": [], "interests": [],
+        "experience": [], "projects": [], "education": [],
+        "certifications": [], "additional": []
+    })
+
+    # Append job title suggestions as plain text (same structure as LLM path)
+    rewritten_text += (
+        f"\n\n### 🎯 Suggested Job Titles (Based on Resume)\n\n"
+        f"1. **Software Engineer** — Core domain match\n"
+        f"2. **Backend Developer** — Strong server-side skill indicators\n"
+        f"3. **Full Stack Developer** — Broad technical coverage detected\n"
+        f"4. **Data Analyst** — Analytical skills and data tools present\n"
+        f"5. **DevOps Engineer** — Infrastructure and automation keywords present\n"
+        f"\n*(Rule-based suggestions — based on keyword matching with your location: {user_location or 'Not specified'})*"
+    )
+
+    return (
+        highlighted_text,
+        rewritten_text,
+        masculine_count,
+        feminine_count,
+        detected_masculine_words,
+        detected_feminine_words,
+        json_skeleton,
+    )
+
+# ── End of rule-based engine ─────────────────────────────────────────────────
+
 with tab1:
     # Slide message styles already defined in global CSS — no extra block needed
+
+    # ── Analysis Engine Mode Selector ────────────────────────────────────────
+    analyzer_mode = st.radio(
+        "🔧 Analysis Engine",
+        ["🤖 LLM-Based Analyzer", "⚙️ Rule-Based Analyzer"],
+        horizontal=True,
+        help=(
+            "**LLM-Based:** Uses Groq AI for deep semantic analysis — slower but more intelligent.\n\n"
+            "**Rule-Based:** Uses regex + keyword logic — instant, no API needed, fully deterministic."
+        ),
+        key="analyzer_mode_radio"
+    )
+    st.markdown(
+        f"<div style='font-size:0.78rem;color:#64748b;margin-bottom:12px;font-family:-apple-system,sans-serif;'>"
+        f"{'🤖 <b>LLM mode:</b> AI-powered semantic scoring via Groq API.' if analyzer_mode == '🤖 LLM-Based Analyzer' else '⚙️ <b>Rule-Based mode:</b> Instant keyword/regex scoring — no API calls.'}"
+        f"</div>",
+        unsafe_allow_html=True
+    )
 
     uploaded_files = st.file_uploader(
         "📄 Upload PDF Resumes",
@@ -6723,25 +7192,7 @@ if uploaded_files and job_description:
         # ✅ Bias detection
         bias_score, masc_count, fem_count, detected_masc, detected_fem = detect_bias(full_text)
 
-        # ⚡ MERGED: single LLM call returns BOTH plain-text rewrite AND JSON.
-        # json_str is the structured JSON for DOCX generation — no second call needed.
-        with st.spinner("✍️ Rewriting resume & generating optimised structure..."):
-            try:
-                highlighted_text, rewritten_text, _, _, _, _, json_str = rewrite_and_highlight(
-                    full_text, replacement_mapping, user_location
-                )
-            except Exception:
-                highlighted_text = full_text
-                rewritten_text   = full_text
-                json_str         = ""
-
-        # ✅ Resume Optimization Module — reuse JSON already produced above (0 extra LLM calls)
-        try:
-            optimized_resume_data = extract_resume_json(json_str)
-        except Exception:
-            optimized_resume_data = extract_resume_json("")  # falls back to empty skeleton
-
-        # ✅ Format check (industry standard — no LLM call)
+        # ✅ Format check (industry standard — no LLM call, run before parallel block)
         try:
             doc_check = fitz.open(file_path)
             num_pages = doc_check.page_count
@@ -6750,19 +7201,69 @@ if uploaded_files and job_description:
             num_pages = 1
         format_data = check_resume_format(full_text, num_pages, pdf_path=file_path)
 
-        # ✅ LLM-based ATS Evaluation (includes domain detection + grammar scoring internally)
-        with st.spinner("🔍 Running ATS evaluation..."):
-            ats_result, ats_scores = ats_percentage_score(
-                resume_text=full_text,
-                job_description=job_description,
-                logic_profile_score=None,
-                edu_weight=edu_weight,
-                exp_weight=exp_weight,
-                skills_weight=skills_weight,
-                lang_weight=lang_weight,
-                keyword_weight=keyword_weight,
-                format_data=format_data,
-            )
+        # ⚡ Route to LLM or Rule-Based engine based on user selection
+        _use_llm = (st.session_state.get("analyzer_mode_radio", "🤖 LLM-Based Analyzer") == "🤖 LLM-Based Analyzer")
+
+        if _use_llm:
+            # ── LLM PATH (original parallel execution — unchanged) ────────────
+            def _task_rewrite():
+                return rewrite_and_highlight(full_text, replacement_mapping, user_location)
+
+            def _task_ats():
+                return ats_percentage_score(
+                    resume_text=full_text,
+                    job_description=job_description,
+                    logic_profile_score=None,
+                    edu_weight=edu_weight,
+                    exp_weight=exp_weight,
+                    skills_weight=skills_weight,
+                    lang_weight=lang_weight,
+                    keyword_weight=keyword_weight,
+                    format_data=format_data,
+                )
+
+            with st.spinner("🤖 LLM mode: Rewriting resume & running ATS evaluation in parallel..."):
+                with ThreadPoolExecutor(max_workers=2) as _executor:
+                    _future_rewrite = _executor.submit(_task_rewrite)
+                    _future_ats     = _executor.submit(_task_ats)
+
+                    try:
+                        highlighted_text, rewritten_text, _, _, _, _, json_str = _future_rewrite.result()
+                    except Exception:
+                        highlighted_text = full_text
+                        rewritten_text   = full_text
+                        json_str         = ""
+
+                    ats_result, ats_scores = _future_ats.result()
+
+        else:
+            # ── RULE-BASED PATH (instant — no API calls) ──────────────────────
+            with st.spinner("⚙️ Rule-Based mode: Running keyword & regex analysis..."):
+                try:
+                    highlighted_text, rewritten_text, _, _, _, _, json_str = rule_rewrite_and_highlight(
+                        full_text, replacement_mapping, user_location
+                    )
+                except Exception:
+                    highlighted_text = full_text
+                    rewritten_text   = full_text
+                    json_str         = ""
+
+                ats_result, ats_scores = rule_ats_percentage_score(
+                    resume_text=full_text,
+                    job_description=job_description,
+                    edu_weight=edu_weight,
+                    exp_weight=exp_weight,
+                    skills_weight=skills_weight,
+                    lang_weight=lang_weight,
+                    keyword_weight=keyword_weight,
+                    format_data=format_data,
+                )
+
+        # ✅ Resume Optimization Module — reuse JSON already produced above (0 extra LLM calls)
+        try:
+            optimized_resume_data = extract_resume_json(json_str)
+        except Exception:
+            optimized_resume_data = extract_resume_json("")  # falls back to empty skeleton
 
         # ✅ Extract structured ATS values
         candidate_name = ats_scores.get("Candidate Name", "Not Found")
