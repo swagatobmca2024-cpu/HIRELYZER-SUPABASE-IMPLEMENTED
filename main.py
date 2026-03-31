@@ -5796,291 +5796,6 @@ Suggestions:
     feedback = feedback_match.group(1).strip() if feedback_match else "Language quality appears adequate for professional communication."
     return score, feedback, suggestions
 
-# ============================================================
-# 🔧 RULE-BASED ANALYZER FUNCTIONS (no LLM usage)
-# ============================================================
-
-# ── Rule-based ATS Scoring ───────────────────────────────────────────────────
-def rule_based_ats_score(
-    resume_text,
-    job_description,
-    edu_weight=20,
-    exp_weight=35,
-    skills_weight=30,
-    lang_weight=5,
-    keyword_weight=10,
-    format_data=None,
-):
-    """
-    Pure regex/keyword ATS scorer — zero LLM calls.
-    Returns (ats_report_str, scores_dict) mirroring ats_percentage_score output.
-    """
-    import datetime
-    text_lower = (resume_text or "").lower()
-    jd_lower   = (job_description or "").lower()
-
-    # ── 1. Education score ────────────────────────────────────────────────────
-    degree_patterns = {
-        r"phd|doctorate|ph\.d": edu_weight,
-        r"m\.?tech|m\.?e\b|master": int(edu_weight * 0.90),
-        r"mca|mba": int(edu_weight * 0.85),
-        r"b\.?tech|b\.?e\b|bachelor|b\.?sc": int(edu_weight * 0.75),
-        r"bca|diploma": int(edu_weight * 0.55),
-    }
-    edu_score = 0
-    edu_evidence = "No recognised degree found."
-    for pat, pts in degree_patterns.items():
-        if re.search(pat, text_lower):
-            edu_score = pts
-            edu_evidence = f"Degree pattern matched: `{pat}` → {pts}/{edu_weight} pts."
-            break
-
-    edu_analysis = (
-        f"**Score:** {edu_score}/{edu_weight}\n"
-        f"Rule-based check on common degree keywords.\n{edu_evidence}"
-    )
-
-    # ── 2. Experience score ───────────────────────────────────────────────────
-    year_matches = re.findall(r'\b(20\d{2})\b', resume_text or "")
-    years_found = sorted(set(int(y) for y in year_matches))
-    current_year = datetime.datetime.now().year
-    if len(years_found) >= 2:
-        span = current_year - min(years_found)
-        exp_yrs = min(span, 20)
-    else:
-        exp_yrs = 0
-
-    if exp_yrs >= 8:
-        exp_score = exp_weight
-    elif exp_yrs >= 5:
-        exp_score = int(exp_weight * 0.85)
-    elif exp_yrs >= 3:
-        exp_score = int(exp_weight * 0.70)
-    elif exp_yrs >= 1:
-        exp_score = int(exp_weight * 0.55)
-    else:
-        exp_score = int(exp_weight * 0.30)
-
-    exp_analysis = (
-        f"**Score:** {exp_score}/{exp_weight}\n"
-        f"Estimated ~{exp_yrs} year(s) of experience based on year mentions in resume."
-    )
-
-    # ── 3. Skills score ───────────────────────────────────────────────────────
-    jd_words = set(re.findall(r'\b[a-zA-Z][a-zA-Z0-9+#.]{2,}\b', jd_lower))
-    resume_words = set(re.findall(r'\b[a-zA-Z][a-zA-Z0-9+#.]{2,}\b', text_lower))
-    # filter out stopwords
-    stopwords = {"the","and","for","are","was","with","this","that","from","have",
-                 "has","been","they","their","will","about","also","such","your",
-                 "our","its","more","than","can","not","but","all","any","who"}
-    jd_keywords = jd_words - stopwords
-    matched_skills = jd_keywords & resume_words
-    skill_ratio = len(matched_skills) / max(len(jd_keywords), 1)
-    skills_score = min(skills_weight, round(skill_ratio * skills_weight * 1.5))
-    missing_kw   = list(jd_keywords - resume_words)[:15]
-
-    skills_analysis = (
-        f"**Score:** {skills_score}/{skills_weight}\n"
-        f"Matched {len(matched_skills)}/{len(jd_keywords)} JD keywords by regex overlap.\n"
-        f"**Missing Keywords:** {', '.join(missing_kw) if missing_kw else 'None identified'}"
-    )
-
-    # ── 4. Language/grammar score ─────────────────────────────────────────────
-    sentences = re.split(r'[.!?]+', resume_text or "")
-    sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
-    passive_count = sum(1 for s in sentences if re.search(r'\b(was|were|been|is|are)\s+\w+ed\b', s, re.IGNORECASE))
-    weak_verbs    = len(re.findall(r'\b(helped|assisted|worked on|involved in|responsible for)\b', text_lower))
-    action_verbs  = len(re.findall(r'\b(led|built|designed|developed|implemented|engineered|managed|created|deployed|optimized|automated|achieved|delivered|reduced|increased|improved|launched|architected|streamlined)\b', text_lower))
-    lang_score = lang_weight
-    if passive_count > 5:  lang_score -= 1
-    if weak_verbs  > 3:    lang_score -= 1
-    if action_verbs < 3:   lang_score -= 1
-    lang_score = max(0, lang_score)
-
-    lang_analysis = (
-        f"**Score:** {lang_score}/{lang_weight}\n"
-        f"Action verbs found: {action_verbs} | Weak verb phrases: {weak_verbs} | Passive constructs: {passive_count}.\n"
-        f"Rule-based check — no grammar inference used."
-    )
-
-    # ── 5. Keyword match score ────────────────────────────────────────────────
-    keyword_score = min(keyword_weight, round((len(matched_skills) / max(len(jd_keywords), 1)) * keyword_weight))
-
-    keyword_analysis = (
-        f"**Score:** {keyword_score}/{keyword_weight}\n"
-        f"Keyword overlap: {len(matched_skills)} shared terms between resume and JD.\n"
-        f"**Missing Critical Keywords:** {', '.join(missing_kw[:10]) if missing_kw else 'None identified'}"
-    )
-
-    # ── 6. Format score (reuse existing check_resume_format) ─────────────────
-    fmt_score_raw = format_data.get("format_score", 75) if format_data else 75
-    fmt_score_raw = max(0, min(100, int(fmt_score_raw)))
-    FORMAT_WEIGHT = 10
-    format_component = round(fmt_score_raw / 100 * FORMAT_WEIGHT)
-
-    format_analysis = (
-        f"**Score:** {fmt_score_raw}/100 (contributes {format_component}/10 pts to total)\n"
-        + ("Format issues: " + "; ".join(format_data.get("issues", []))[:200] if format_data and format_data.get("issues") else "No major format issues detected.")
-    )
-
-    # ── 7. Domain detection via rule-based function ───────────────────────────
-    resume_domain = detect_domain_from_title_and_description("", resume_text[:600] if resume_text else "")
-    job_domain    = detect_domain_from_title_and_description(job_description[:80] if job_description else "", job_description[:600] if job_description else "")
-    similarity_score = get_domain_similarity(resume_domain, job_domain)
-    MAX_DOMAIN_PENALTY = 15
-    domain_penalty = round((1 - similarity_score) * MAX_DOMAIN_PENALTY)
-
-    # ── 8. Total score assembly ───────────────────────────────────────────────
-    weight_total = edu_weight + exp_weight + skills_weight + lang_weight + keyword_weight
-    content_score_raw = edu_score + exp_score + skills_score + lang_score + keyword_score
-    content_score = round(content_score_raw / max(weight_total, 1) * 90)
-    content_score = max(0, min(90, content_score))
-    pre_penalty   = content_score + format_component
-    total_score   = max(15, min(100, pre_penalty - domain_penalty))
-
-    formatted_score = (
-        "Exceptional Match — Top 10% Candidate"   if total_score >= 85 else
-        "Strong Match — Recommend for Interview"   if total_score >= 70 else
-        "Good Potential — Competitive Candidate"   if total_score >= 55 else
-        "Fair Match — Needs Resume Optimization"   if total_score >= 40 else
-        "Developing — Significant Skill Gaps"      if total_score >= 25 else
-        "Poor Match — Major Role Misalignment"
-    )
-
-    # ── Candidate name (simple heuristic) ────────────────────────────────────
-    lines = [l.strip() for l in (resume_text or "").splitlines() if l.strip()]
-    candidate_name = "Not Found"
-    for line in lines[:8]:
-        words = line.split()
-        if 2 <= len(words) <= 4 and all(w[0].isupper() for w in words if w.isalpha()):
-            candidate_name = line
-            break
-
-    final_thoughts = (
-        f"**Rule-Based ATS Score: {total_score}/100** ({formatted_score})\n\n"
-        f"- Content Score: {content_score}/90\n"
-        f"- Format Component: {format_component}/10\n"
-        f"- Domain Penalty: -{domain_penalty} pts\n"
-        f"- Resume Domain: {resume_domain} | Job Domain: {job_domain}\n"
-        f"- Domain Similarity: {similarity_score:.2f}/1.0\n\n"
-        f"*Scored by regex/keyword rules — no LLM used.*"
-    )
-
-    ats_result = (
-        f"## Rule-Based ATS Report\n\n"
-        f"**Candidate:** {candidate_name}\n"
-        f"**Total Score:** {total_score}/100 — {formatted_score}\n\n"
-        f"### Education\n{edu_analysis}\n\n"
-        f"### Experience\n{exp_analysis}\n\n"
-        f"### Skills\n{skills_analysis}\n\n"
-        f"### Language Quality\n{lang_analysis}\n\n"
-        f"### Keyword Match\n{keyword_analysis}\n\n"
-        f"### Format\n{format_analysis}\n\n"
-        f"### Final Thoughts\n{final_thoughts}"
-    )
-
-    return ats_result, {
-        "Candidate Name": candidate_name,
-        "Education Score": edu_score,
-        "Experience Score": exp_score,
-        "Skills Score": skills_score,
-        "Language Score": lang_score,
-        "Keyword Score": keyword_score,
-        "Format Score": fmt_score_raw,
-        "Format Grade": format_data.get("letter_grade", "N/A") if format_data else "N/A",
-        "Format Label": format_data.get("label", "") if format_data else "",
-        "Format Issues": format_data.get("issues", []) if format_data else [],
-        "Format Passes": format_data.get("passes", []) if format_data else [],
-        "ATS Match %": total_score,
-        "Formatted Score": formatted_score,
-        "Education Analysis": edu_analysis,
-        "Experience Analysis": exp_analysis,
-        "Skills Analysis": skills_analysis,
-        "Language Analysis": lang_analysis,
-        "Keyword Analysis": keyword_analysis,
-        "Format Analysis": format_analysis,
-        "Final Thoughts": final_thoughts,
-        "Missing Keywords": ', '.join(missing_kw[:10]) if missing_kw else "None identified",
-        "Missing Skills": ', '.join(missing_kw[:10]) if missing_kw else "None identified",
-        "Resume Domain": resume_domain,
-        "Job Domain": job_domain,
-        "Domain Penalty": domain_penalty,
-        "Domain Similarity Score": similarity_score,
-    }
-
-
-# ── Rule-based bias detection (same word lists, no LLM call) ─────────────────
-# detect_bias() already uses pure regex — reused directly in rule-based mode.
-
-# ── Rule-based resume rewriter (template-based, no LLM call) ─────────────────
-def rule_based_rewrite_and_highlight(text, replacement_mapping, user_location=""):
-    """
-    Template-based resume cleanup:
-      1. Applies the gendered-word replacement mapping (same as LLM mode).
-      2. Cleans weak verbs, passive constructs.
-      3. Returns (highlighted_text, rewritten_text, masc_count, fem_count,
-                  detected_masc, detected_fem, json_str="")
-    Signature matches rewrite_and_highlight() so the caller needs no changes.
-    """
-    # Step A: run the existing detect_bias() for word counts + highlighted text
-    bias_score, masc_count, fem_count, detected_masc, detected_fem = detect_bias(text)
-
-    # Step B: highlight gendered words in text (same logic as LLM path)
-    highlighted_text = text
-    matched_spans = []
-    def span_overlaps(s, e):
-        return any(s < me and e > ms for ms, me in matched_spans)
-
-    masculine_words_list = list((replacement_mapping or {}).get("masculine", replacement_mapping or {}).keys()) if isinstance(list((replacement_mapping or {}).keys())[0] if replacement_mapping else "", str) else []
-    # Flatten: replacement_mapping can be already-merged dict (masc|fem) from caller
-    all_replacements = replacement_mapping or {}
-
-    for word, neutral in all_replacements.items():
-        pattern = re.compile(rf'\b{re.escape(word)}\b', re.IGNORECASE)
-        for match in pattern.finditer(highlighted_text):
-            start, end = match.span()
-            if span_overlaps(start, end):
-                continue
-            word_match = match.group(0)
-            colored = f"<span style='color:#f59e0b;font-weight:600;' title='Replaced with: {neutral}'>{word_match}</span>"
-            highlighted_text = highlighted_text[:start] + colored + highlighted_text[end:]
-            shift = len(colored) - len(word_match)
-            matched_spans = [(s if s < start else s+shift, e if s < start else e+shift) for s, e in matched_spans]
-            matched_spans.append((start, start+len(colored)))
-            break
-
-    # Step C: build a clean rewritten text using template rules (no LLM)
-    WEAK_VERB_MAP = {
-        r'\bhelped\b': 'supported', r'\bassisted\b': 'assisted', r'\bworked on\b': 'contributed to',
-        r'\binvolved in\b': 'participated in', r'\bresponsible for\b': 'managed',
-        r'\bwas responsible\b': 'led', r'\btried to\b': '',
-    }
-    rewritten = text
-    for pat, replacement in WEAK_VERB_MAP.items():
-        rewritten = re.sub(pat, replacement, rewritten, flags=re.IGNORECASE)
-
-    # Apply gendered word replacements
-    for word, neutral in all_replacements.items():
-        rewritten = re.sub(rf'\b{re.escape(word)}\b', neutral, rewritten, flags=re.IGNORECASE)
-
-    # Normalize whitespace / blank lines
-    rewritten_lines = []
-    for line in rewritten.splitlines():
-        stripped = line.strip()
-        rewritten_lines.append(stripped)
-    rewritten = "\n".join(rewritten_lines)
-    # Collapse >2 consecutive blank lines
-    rewritten = re.sub(r'\n{3,}', '\n\n', rewritten)
-
-    rewritten_with_note = (
-        rewritten +
-        "\n\n---\n*Resume cleaned by Rule-Based Analyzer — weak verbs replaced, "
-        "gendered language neutralized. No LLM was used.*"
-    )
-
-    return highlighted_text, rewritten_with_note, masc_count, fem_count, detected_masc, detected_fem, ""
-
-
 # ✅ Main ATS Evaluation Function
 def ats_percentage_score(
     resume_text,
@@ -6725,76 +6440,6 @@ with st.sidebar.expander("![Settings](https://img.icons8.com/ios-filled/20/setti
         )
 
 with tab1:
-    # ── Analyzer Mode Selector ────────────────────────────────────────────────
-    st.markdown("""
-    <div style="
-        background: linear-gradient(135deg, rgba(14,20,32,0.85) 0%, rgba(10,16,26,0.9) 100%);
-        border: 1px solid rgba(56,189,248,0.20);
-        border-radius: 12px;
-        padding: 14px 20px;
-        margin-bottom: 18px;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-    ">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#38bdf8"
-             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"/>
-            <line x1="12" y1="8" x2="12" y2="12"/>
-            <line x1="12" y1="16" x2="12.01" y2="16"/>
-        </svg>
-        <span style="color:#7dd3fc; font-size:0.82rem; font-weight:600; letter-spacing:0.04em;">
-            SELECT ANALYZER MODE
-        </span>
-    </div>
-    """, unsafe_allow_html=True)
-
-    _analyzer_mode = st.radio(
-        "",
-        options=["🤖 LLM-Based Analyzer", "⚙️ Rule-Based Analyzer"],
-        index=0,
-        horizontal=True,
-        key="analyzer_mode_radio",
-        help=(
-            "LLM-Based: uses Groq API for rich, context-aware scoring. "
-            "Rule-Based: uses regex + keyword matching — no API calls, instant results."
-        ),
-    )
-    _use_rule_based = (_analyzer_mode == "⚙️ Rule-Based Analyzer")
-
-    if _use_rule_based:
-        st.markdown("""
-        <div style="
-            background: rgba(251,191,36,0.08);
-            border: 1px solid rgba(251,191,36,0.25);
-            border-radius: 8px;
-            padding: 8px 14px;
-            margin-bottom: 12px;
-            font-size: 0.8rem;
-            color: #fde68a;
-            font-family: -apple-system, sans-serif;
-        ">
-            ⚙️ <b>Rule-Based mode active</b> — scoring uses regex, keyword overlap &amp;
-            template cleanup. No LLM API calls are made.
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown("""
-        <div style="
-            background: rgba(56,189,248,0.08);
-            border: 1px solid rgba(56,189,248,0.22);
-            border-radius: 8px;
-            padding: 8px 14px;
-            margin-bottom: 12px;
-            font-size: 0.8rem;
-            color: #7dd3fc;
-            font-family: -apple-system, sans-serif;
-        ">
-            🤖 <b>LLM-Based mode active</b> — scoring uses Groq AI for deep contextual analysis.
-        </div>
-        """, unsafe_allow_html=True)
-
     # Slide message styles already defined in global CSS — no extra block needed
 
     uploaded_files = st.file_uploader(
@@ -7088,69 +6733,40 @@ if uploaded_files and job_description:
             num_pages = 1
         format_data = check_resume_format(full_text, num_pages, pdf_path=file_path)
 
-        # ── Route to Rule-Based or LLM-Based analyzer depending on mode ────────
-        _use_rule_based = st.session_state.get("analyzer_mode_radio", "🤖 LLM-Based Analyzer") == "⚙️ Rule-Based Analyzer"
+        # ⚡ PARALLEL: rewrite + ATS run simultaneously using threads.
+        # Both are network-bound (Groq API) so they benefit from parallelism
+        # without needing async — ThreadPoolExecutor handles it safely.
+        def _task_rewrite():
+            return rewrite_and_highlight(full_text, replacement_mapping, user_location)
 
-        if _use_rule_based:
-            # ── RULE-BASED PATH: no LLM calls, instant results ────────────────
-            with st.spinner("⚙️ Running rule-based analysis (no API calls)..."):
+        def _task_ats():
+            return ats_percentage_score(
+                resume_text=full_text,
+                job_description=job_description,
+                logic_profile_score=None,
+                edu_weight=edu_weight,
+                exp_weight=exp_weight,
+                skills_weight=skills_weight,
+                lang_weight=lang_weight,
+                keyword_weight=keyword_weight,
+                format_data=format_data,
+            )
+
+        with st.spinner("✍️ Rewriting resume & running ATS evaluation in parallel..."):
+            with ThreadPoolExecutor(max_workers=2) as _executor:
+                _future_rewrite = _executor.submit(_task_rewrite)
+                _future_ats     = _executor.submit(_task_ats)
+
+                # Collect rewrite result
                 try:
-                    highlighted_text, rewritten_text, _, _, _, _, json_str = \
-                        rule_based_rewrite_and_highlight(
-                            full_text,
-                            replacement_mapping["masculine"] | replacement_mapping["feminine"],
-                            user_location
-                        )
+                    highlighted_text, rewritten_text, _, _, _, _, json_str = _future_rewrite.result()
                 except Exception:
                     highlighted_text = full_text
                     rewritten_text   = full_text
                     json_str         = ""
 
-                ats_result, ats_scores = rule_based_ats_score(
-                    resume_text=full_text,
-                    job_description=job_description,
-                    edu_weight=edu_weight,
-                    exp_weight=exp_weight,
-                    skills_weight=skills_weight,
-                    lang_weight=lang_weight,
-                    keyword_weight=keyword_weight,
-                    format_data=format_data,
-                )
-        else:
-            # ── LLM-BASED PATH (original): parallel rewrite + ATS ─────────────
-            # Both are network-bound (Groq API) so they benefit from parallelism
-            # without needing async — ThreadPoolExecutor handles it safely.
-            def _task_rewrite():
-                return rewrite_and_highlight(full_text, replacement_mapping, user_location)
-
-            def _task_ats():
-                return ats_percentage_score(
-                    resume_text=full_text,
-                    job_description=job_description,
-                    logic_profile_score=None,
-                    edu_weight=edu_weight,
-                    exp_weight=exp_weight,
-                    skills_weight=skills_weight,
-                    lang_weight=lang_weight,
-                    keyword_weight=keyword_weight,
-                    format_data=format_data,
-                )
-
-            with st.spinner("✍️ Rewriting resume & running ATS evaluation in parallel..."):
-                with ThreadPoolExecutor(max_workers=2) as _executor:
-                    _future_rewrite = _executor.submit(_task_rewrite)
-                    _future_ats     = _executor.submit(_task_ats)
-
-                    # Collect rewrite result
-                    try:
-                        highlighted_text, rewritten_text, _, _, _, _, json_str = _future_rewrite.result()
-                    except Exception:
-                        highlighted_text = full_text
-                        rewritten_text   = full_text
-                        json_str         = ""
-
-                    # Collect ATS result
-                    ats_result, ats_scores = _future_ats.result()
+                # Collect ATS result
+                ats_result, ats_scores = _future_ats.result()
 
         # ✅ Resume Optimization Module — reuse JSON already produced above (0 extra LLM calls)
         try:
@@ -7318,7 +6934,6 @@ if uploaded_files and job_description:
             "Domain Similarity Score": ats_scores.get("Domain Similarity Score", 1.0),
             "Resume Domain": ats_scores.get("Resume Domain", domain),
             "Job Domain": ats_scores.get("Job Domain", "Unknown"),
-            "Analyzer Mode": "Rule-Based" if _use_rule_based else "LLM-Based",
         })
 
         insert_candidate(
@@ -7704,22 +7319,6 @@ with tab1:
             missing_skills = resume.get("Missing Skills", [])
 
             with st.expander(f"{resume_name} | {candidate_name}"):
-                # ── Analyzer mode badge ──────────────────────────────────────────
-                _res_mode = resume.get("Analyzer Mode", "LLM-Based")
-                if _res_mode == "Rule-Based":
-                    _mode_badge_style = "background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.30);color:#fde68a;"
-                    _mode_badge_icon  = "⚙️"
-                else:
-                    _mode_badge_style = "background:rgba(56,189,248,0.10);border:1px solid rgba(56,189,248,0.25);color:#7dd3fc;"
-                    _mode_badge_icon  = "🤖"
-                st.markdown(
-                    f'<div style="display:inline-flex;align-items:center;gap:6px;{_mode_badge_style}'
-                    f'border-radius:6px;padding:4px 12px;font-size:0.75rem;font-weight:600;'
-                    f'font-family:-apple-system,sans-serif;letter-spacing:0.03em;margin-bottom:10px;">'
-                    f'{_mode_badge_icon} {_res_mode} Analyzer</div>',
-                    unsafe_allow_html=True
-                )
-
                 st.markdown(
                     f'<div style="background:linear-gradient(135deg,rgba(56,189,248,0.10) 0%,rgba(79,163,227,0.05) 100%);border:1px solid rgba(56,189,248,0.18);border-radius:14px;padding:18px 22px;margin-bottom:20px;">'
                     f'<div style="font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:1rem;font-weight:700;color:#f0f4f8;letter-spacing:-0.01em;">ATS Evaluation — <span style="color:#38bdf8;">{candidate_name}</span></div>'
@@ -8133,9 +7732,6 @@ with tab1:
 
     elif not uploaded_files:
         st.warning("⚠️ Please upload resumes to view dashboard analytics.")
-from xhtml2pdf import pisa
-from io import BytesIO
-
 def html_to_pdf_bytes(html_string):
     styled_html = f"""
     <html>
