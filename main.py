@@ -88,7 +88,11 @@ from user_login import (
     get_user_by_email,
     update_password_by_email,
     is_strong_password,
-    domain_has_mx_record
+    domain_has_mx_record,
+    # ── Usage rate limiting ──
+    check_and_gate_feature,
+    record_feature_usage,
+    get_usage_count_last_hour,
 )
 
 # ============================================================
@@ -865,18 +869,15 @@ section[data-testid="stSidebar"] .stTextArea > div > div > textarea {
    FILE UPLOADER
    ══════════════════════════════════════ */
 .stFileUploader > div {
-    background: rgba(10,20,40,0.35) !important;
-    border: 1.5px solid rgba(0,200,255,0.4) !important;
+    background: var(--surface-01) !important;
+    border: 1.5px dashed rgba(79,163,227,0.3) !important;
     border-radius: var(--radius-lg) !important;
-    backdrop-filter: blur(14px) !important;
-    box-shadow: 0 0 12px rgba(0,200,255,0.15) !important;
     transition: all var(--transition-base) !important;
-    overflow: visible !important;
 }
 .stFileUploader > div:hover {
-    border-color: rgba(0,200,255,0.75) !important;
-    background: rgba(10,20,40,0.5) !important;
-    box-shadow: 0 0 24px rgba(0,200,255,0.25) !important;
+    border-color: rgba(79,163,227,0.6) !important;
+    background: rgba(79,163,227,0.04) !important;
+    box-shadow: 0 0 40px rgba(79,163,227,0.07) !important;
 }
 
 /* ══════════════════════════════════════
@@ -1377,19 +1378,10 @@ h3, .stMarkdown h3 {
    ══════════════════════════════════════ */
 .stFileUploader [data-testid="stFileUploaderDropzone"] {
     background: rgba(56,189,248,0.02) !important;
-    overflow: visible !important;
-    position: relative !important;
-    z-index: 1 !important;
 }
 .stFileUploader [data-testid="stFileUploaderDropzone"] span {
     color: var(--text-secondary) !important;
     font-family: var(--font-sans) !important;
-}
-/* Ensure the Browse Files button is always fully visible and clickable */
-.stFileUploader button {
-    overflow: visible !important;
-    position: relative !important;
-    z-index: 2 !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -2466,16 +2458,32 @@ with tab1:
     .shimmer:hover::before { left: 100%; top: 100%; }
 
     /* ---------- FILE UPLOADER ---------- */
-    .stFileUploader > div {
-        border: 1px solid rgba(0,200,255,0.5) !important;
-        border-radius: 14px !important;
-        background: rgba(10,20,40,0.35) !important;
-        backdrop-filter: blur(14px) !important;
-        box-shadow: 0 0 12px rgba(0,200,255,0.3) !important;
+    .stFileUploader > div > div {
+        border: 1px solid rgba(0,200,255,0.5);
+        border-radius: 14px;
+        background: rgba(10,20,40,0.35);
+        backdrop-filter: blur(14px);
+        color: #cce6ff;
+        box-shadow: 0 0 12px rgba(0,200,255,0.3);
+        position: relative;
+        overflow: visible;
     }
-    .stFileUploader > div:hover {
-        border-color: rgba(0,200,255,0.8) !important;
-        background: rgba(10,20,40,0.5) !important;
+    .stFileUploader > div > div::before {
+        content: none;
+    }
+    /* Subtle glow on hover instead of the shimmer overlay */
+    .stFileUploader > div > div:hover {
+        box-shadow: 0 0 20px rgba(0,200,255,0.45);
+        border-color: rgba(0,200,255,0.75);
+    }
+    /* Ensure the Browse Files button and inner text are always visible */
+    .stFileUploader [data-testid="stFileUploaderDropzone"] {
+        position: relative;
+        z-index: 1;
+    }
+    .stFileUploader [data-testid="stFileUploaderDropzoneInstructions"] {
+        position: relative;
+        z-index: 1;
     }
 
     /* ---------- BUTTONS ---------- */
@@ -6403,6 +6411,28 @@ with st.sidebar.expander("![Job](https://img.icons8.com/ios-filled/20/briefcase.
         height=200
     )
 
+    # ── Resume Analyzer quota badge ───────────────────────────────────────────
+    _ra_username = st.session_state.get("username")
+    if _ra_username:
+        _ra_used = get_usage_count_last_hour(_ra_username, "resume_analyzer")
+        _ra_remaining = max(0, 2 - _ra_used)
+        _ra_color = "#34d399" if _ra_remaining > 0 else "#fb7185"
+        _ra_svg = (
+            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" '
+            'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+            'style="display:inline-block;vertical-align:middle;margin-right:5px;">'
+            '<rect x="3" y="3" width="7" height="7"/>'
+            '<rect x="14" y="3" width="7" height="7"/>'
+            '<rect x="14" y="14" width="7" height="7"/>'
+            '<rect x="3" y="14" width="7" height="7"/>'
+            '</svg>'
+        )
+        st.markdown(
+            f'<div style="display:flex;align-items:center;font-size:0.78rem;color:{_ra_color};margin-top:4px;font-family:-apple-system,sans-serif;">'
+            f'{_ra_svg} Resume Analyzer: <b style="margin-left:3px;">{_ra_remaining}/2</b>&nbsp;analyses remaining this hour</div>',
+            unsafe_allow_html=True
+        )
+
     if job_description.strip() == "":
         st.warning("Please enter a job description to evaluate the resumes.")
 
@@ -6537,6 +6567,36 @@ resume_data = st.session_state.resume_data
 
 # ✏️ Resume Evaluation Logic
 if uploaded_files and job_description:
+    # ── Usage gate: only check when there are NEW files not yet processed ─────
+    _gate_username = st.session_state.get("username")
+    _new_files = [
+        f for f in uploaded_files
+        if f.name not in st.session_state.get("processed_files", set())
+        and f.size <= _MAX_FILE_BYTES
+    ]
+    if _gate_username and _new_files:
+        _gate_allowed, _gate_msg = check_and_gate_feature(_gate_username, "resume_analyzer")
+        if not _gate_allowed:
+            st.markdown(_gate_msg, unsafe_allow_html=True)
+            _gate_used = get_usage_count_last_hour(_gate_username, "resume_analyzer")
+            _gate_svg_clock = (
+                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" '
+                'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+                'style="display:inline-block;vertical-align:middle;margin-right:5px;">'
+                '<circle cx="12" cy="12" r="10"/>'
+                '<polyline points="12 6 12 12 16 14"/>'
+                '</svg>'
+            )
+            st.markdown(
+                f'<div style="display:flex;align-items:center;font-size:0.88rem;color:#7dd3fc;'
+                f'background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.2);'
+                f'border-radius:8px;padding:10px 14px;margin-top:8px;font-family:-apple-system,sans-serif;">'
+                f'{_gate_svg_clock} You have used <b style="margin:0 3px;">{_gate_used}/2</b> resume analyses this hour. Resets on a rolling 60-minute window.</div>',
+                unsafe_allow_html=True
+            )
+            st.stop()
+    # ─────────────────────────────────────────────────────────────────────────
+
     all_text = []
 
     for uploaded_file in uploaded_files:
@@ -6955,6 +7015,12 @@ if uploaded_files and job_description:
         )
 
         st.session_state.processed_files.add(uploaded_file.name)
+
+        # ── Record usage after successful analysis ────────────────────────────
+        _rec_username = st.session_state.get("username")
+        if _rec_username:
+            record_feature_usage(_rec_username, "resume_analyzer")
+        # ─────────────────────────────────────────────────────────────────────
 
         # ✅ IMPROVED: Smoother success animation with better transitions
         SUCCESS_HTML = """
