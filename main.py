@@ -1379,6 +1379,37 @@ h3, .stMarkdown h3 {
     color: var(--text-secondary) !important;
     font-family: var(--font-sans) !important;
 }
+
+/* ══════════════════════════════════════
+   FIX: Streamlit 1.35 uploader browse button
+   (.stButton styles were bleeding in and
+   causing the double "uploadUpload" overlap)
+   ══════════════════════════════════════ */
+[data-testid="stFileUploaderDropzone"] button {
+    all: unset !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 6px 18px !important;
+    background: rgba(56,189,248,0.10) !important;
+    color: #38bdf8 !important;
+    border: 1px solid rgba(56,189,248,0.35) !important;
+    border-radius: 6px !important;
+    font-size: 0.82rem !important;
+    font-weight: 600 !important;
+    font-family: -apple-system, sans-serif !important;
+    letter-spacing: 0.03em !important;
+    cursor: pointer !important;
+    transition: background 0.2s !important;
+}
+[data-testid="stFileUploaderDropzone"] button:hover {
+    background: rgba(56,189,248,0.18) !important;
+    border-color: rgba(56,189,248,0.6) !important;
+}
+/* Hide the duplicate span Streamlit 1.35 injects inside the browse button */
+[data-testid="stFileUploaderDropzone"] button > span + span {
+    display: none !important;
+}
 </style>
 """, unsafe_allow_html=True)
 # 🔹 VIDEO BACKGROUND & GLOW TEXT
