@@ -1379,37 +1379,6 @@ h3, .stMarkdown h3 {
     color: var(--text-secondary) !important;
     font-family: var(--font-sans) !important;
 }
-
-/* ══════════════════════════════════════
-   FIX: Streamlit 1.35 uploader browse button
-   (.stButton styles were bleeding in and
-   causing the double "uploadUpload" overlap)
-   ══════════════════════════════════════ */
-[data-testid="stFileUploaderDropzone"] button {
-    all: unset !important;
-    display: inline-flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    padding: 6px 18px !important;
-    background: rgba(56,189,248,0.10) !important;
-    color: #38bdf8 !important;
-    border: 1px solid rgba(56,189,248,0.35) !important;
-    border-radius: 6px !important;
-    font-size: 0.82rem !important;
-    font-weight: 600 !important;
-    font-family: -apple-system, sans-serif !important;
-    letter-spacing: 0.03em !important;
-    cursor: pointer !important;
-    transition: background 0.2s !important;
-}
-[data-testid="stFileUploaderDropzone"] button:hover {
-    background: rgba(56,189,248,0.18) !important;
-    border-color: rgba(56,189,248,0.6) !important;
-}
-/* Hide the duplicate span Streamlit 1.35 injects inside the browse button */
-[data-testid="stFileUploaderDropzone"] button > span + span {
-    display: none !important;
-}
 </style>
 """, unsafe_allow_html=True)
 # 🔹 VIDEO BACKGROUND & GLOW TEXT
@@ -2485,7 +2454,8 @@ with tab1:
     .shimmer:hover::before { left: 100%; top: 100%; }
 
     /* ---------- FILE UPLOADER ---------- */
-    .stFileUploader > div > div {
+    /* Dropzone box only — NOT the uploaded file rows */
+    .stFileUploader [data-testid="stFileUploaderDropzone"] {
         border: 1px solid rgba(0,200,255,0.5);
         border-radius: 14px;
         background: rgba(10,20,40,0.35);
@@ -2495,7 +2465,7 @@ with tab1:
         position: relative;
         overflow: hidden;
     }
-    .stFileUploader > div > div::before {
+    .stFileUploader [data-testid="stFileUploaderDropzone"]::before {
         content: "";
         position: absolute; top: -50%; left: -50%;
         width: 200%; height: 200%;
@@ -2505,8 +2475,19 @@ with tab1:
             transparent 60%);
         transform: rotate(25deg);
         transition: all 0.6s;
+        pointer-events: none;
     }
-    .stFileUploader > div > div:hover::before { left: 100%; top: 100%; }
+    .stFileUploader [data-testid="stFileUploaderDropzone"]:hover::before { left: 100%; top: 100%; }
+
+    /* Uploaded file rows — clean, no shimmer, no overflow clipping */
+    .stFileUploader [data-testid="stFileUploaderFile"] {
+        overflow: visible !important;
+        position: static !important;
+    }
+    .stFileUploader [data-testid="stFileUploaderFile"]::before {
+        display: none !important;
+        content: none !important;
+    }
 
     /* ---------- BUTTONS ---------- */
     .stButton > button {
