@@ -865,15 +865,18 @@ section[data-testid="stSidebar"] .stTextArea > div > div > textarea {
    FILE UPLOADER
    ══════════════════════════════════════ */
 .stFileUploader > div {
-    background: var(--surface-01) !important;
-    border: 1.5px dashed rgba(79,163,227,0.3) !important;
+    background: rgba(10,20,40,0.35) !important;
+    border: 1.5px solid rgba(0,200,255,0.4) !important;
     border-radius: var(--radius-lg) !important;
+    backdrop-filter: blur(14px) !important;
+    box-shadow: 0 0 12px rgba(0,200,255,0.15) !important;
     transition: all var(--transition-base) !important;
+    overflow: visible !important;
 }
 .stFileUploader > div:hover {
-    border-color: rgba(79,163,227,0.6) !important;
-    background: rgba(79,163,227,0.04) !important;
-    box-shadow: 0 0 40px rgba(79,163,227,0.07) !important;
+    border-color: rgba(0,200,255,0.75) !important;
+    background: rgba(10,20,40,0.5) !important;
+    box-shadow: 0 0 24px rgba(0,200,255,0.25) !important;
 }
 
 /* ══════════════════════════════════════
@@ -1374,10 +1377,19 @@ h3, .stMarkdown h3 {
    ══════════════════════════════════════ */
 .stFileUploader [data-testid="stFileUploaderDropzone"] {
     background: rgba(56,189,248,0.02) !important;
+    overflow: visible !important;
+    position: relative !important;
+    z-index: 1 !important;
 }
 .stFileUploader [data-testid="stFileUploaderDropzone"] span {
     color: var(--text-secondary) !important;
     font-family: var(--font-sans) !important;
+}
+/* Ensure the Browse Files button is always fully visible and clickable */
+.stFileUploader button {
+    overflow: visible !important;
+    position: relative !important;
+    z-index: 2 !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -2454,39 +2466,16 @@ with tab1:
     .shimmer:hover::before { left: 100%; top: 100%; }
 
     /* ---------- FILE UPLOADER ---------- */
-    /* Dropzone box only — NOT the uploaded file rows */
-    .stFileUploader [data-testid="stFileUploaderDropzone"] {
-        border: 1px solid rgba(0,200,255,0.5);
-        border-radius: 14px;
-        background: rgba(10,20,40,0.35);
-        backdrop-filter: blur(14px);
-        color: #cce6ff;
-        box-shadow: 0 0 12px rgba(0,200,255,0.3);
-        position: relative;
-        overflow: hidden;
+    .stFileUploader > div {
+        border: 1px solid rgba(0,200,255,0.5) !important;
+        border-radius: 14px !important;
+        background: rgba(10,20,40,0.35) !important;
+        backdrop-filter: blur(14px) !important;
+        box-shadow: 0 0 12px rgba(0,200,255,0.3) !important;
     }
-    .stFileUploader [data-testid="stFileUploaderDropzone"]::before {
-        content: "";
-        position: absolute; top: -50%; left: -50%;
-        width: 200%; height: 200%;
-        background: linear-gradient(120deg,
-            rgba(255,255,255,0.15) 0%,
-            rgba(255,255,255,0.05) 40%,
-            transparent 60%);
-        transform: rotate(25deg);
-        transition: all 0.6s;
-        pointer-events: none;
-    }
-    .stFileUploader [data-testid="stFileUploaderDropzone"]:hover::before { left: 100%; top: 100%; }
-
-    /* Uploaded file rows — clean, no shimmer, no overflow clipping */
-    .stFileUploader [data-testid="stFileUploaderFile"] {
-        overflow: visible !important;
-        position: static !important;
-    }
-    .stFileUploader [data-testid="stFileUploaderFile"]::before {
-        display: none !important;
-        content: none !important;
+    .stFileUploader > div:hover {
+        border-color: rgba(0,200,255,0.8) !important;
+        background: rgba(10,20,40,0.5) !important;
     }
 
     /* ---------- BUTTONS ---------- */
